@@ -8,7 +8,7 @@ jobs:
   test-intel:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: swift test
       - run: swift build --package-path IntegrationTests/PackageConsumer
       - run: swift build -c release
@@ -16,22 +16,33 @@ jobs:
   test-arm:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - name: Capture Apple cache discovery contract
+        shell: bash
+        run: |
+          {
+            uname -m
+            sysctl hw.cacheconfig hw.cachesize hw.l1dcachesize hw.l2cachesize hw.l3cachesize
+            sysctl -a | /usr/bin/sort | /usr/bin/grep '^hw\.perflevel.*\(cache\|cpu\)' || true
+          } > apple-cache-contract.txt 2>&1
+          cat apple-cache-contract.txt
       - run: swift test
       - run: swift build -c release
       - run: .build/release/aida128-bench --samples 3 --duration-ms 20 --format json --output arm-smoke.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: arm-smoke-report
-          path: arm-smoke.json
+          path: |
+            arm-smoke.json
+            apple-cache-contract.txt
 
   universal-package:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: chmod +x scripts/build-universal.sh
       - run: VERSION=0.1.0-rc.1 scripts/build-universal.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Aida128-universal2
           path: dist/*
