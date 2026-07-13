@@ -13,13 +13,26 @@ final class BenchmarkViewModel: ObservableObject {
     @Published private(set) var activeLevel: CacheLevel?
     @Published private(set) var activeMetric: BenchmarkMetric?
     @Published var totalDurationSeconds = 30
+    private var enrichmentTask: Task<Void, Never>?
+    private var benchmarkTask: Task<Void, Never>?
 
     init() {
         do {
-            systemInformation = try BenchmarkRunner.systemInformation()
+            let initial = try BenchmarkRunner.systemInformation()
+            systemInformation = initial
+            enrichmentTask = Task { [weak self] in
+                let enriched = await BenchmarkRunner.enriched(initial)
+                guard !Task.isCancelled else { return }
+                self?.applyHardwareMetadata(enriched.hardwareMetadata)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    deinit {
+        enrichmentTask?.cancel()
+        benchmarkTask?.cancel()
     }
 
     var visibleMeasurements: [BenchmarkMeasurement] {
@@ -48,7 +61,7 @@ final class BenchmarkViewModel: ObservableObject {
         progress = nil
         let duration = Duration.seconds(totalDurationSeconds)
 
-        Task {
+        benchmarkTask = Task { [weak self] in
             let (updates, continuation) = AsyncStream.makeStream(of: BenchmarkProgress.self)
             let run = Task.detached(priority: .userInitiated) {
                 defer { continuation.finish() }
@@ -60,18 +73,24 @@ final class BenchmarkViewModel: ObservableObject {
                 }
             }
             do {
-                for await update in updates { receive(update) }
+                for await update in updates { self?.receive(update) }
                 let completedReport = try await run.value
-                systemInformation = completedReport.system
+                guard let self else { return }
+                systemInformation = completedReport.system.replacingHardwareMetadata(
+                    systemInformation?.hardwareMetadata
+                )
                 merge(completedReport.measurements)
                 rebuildReport(workerCount: completedReport.throughputWorkerCount)
             } catch {
                 run.cancel()
-                errorMessage = error.localizedDescription
+                await MainActor.run { self?.errorMessage = error.localizedDescription }
             }
-            isRunning = false
-            activeLevel = nil
-            activeMetric = nil
+            await MainActor.run {
+                self?.isRunning = false
+                self?.activeLevel = nil
+                self?.activeMetric = nil
+                self?.benchmarkTask = nil
+            }
         }
     }
 
@@ -150,5 +169,13 @@ final class BenchmarkViewModel: ObservableObject {
             measurements: visibleMeasurements,
             throughputWorkerCount: workerCount
         )
+    }
+
+    private func applyHardwareMetadata(_ metadata: HardwareMetadata?) {
+        guard let current = systemInformation else { return }
+        systemInformation = current.replacingHardwareMetadata(metadata)
+        if let workerCount = report?.throughputWorkerCount {
+            rebuildReport(workerCount: workerCount)
+        }
     }
 }

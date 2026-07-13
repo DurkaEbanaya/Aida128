@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.0-rc.2] - 2026-07-13
+
+### Added
+
+- Apple Silicon-specific system panel with SoC topology, unified memory, optional GPU, firmware, OS loader, and System Cache metadata provenance.
+- Additive caller-sized `A128SystemInfoV2` metadata ABI while preserving the legacy benchmark ABI.
+
+### Fixed
+
+- Keep Apple Silicon experimental SLC capacities display-only; benchmark execution still requires a runtime-verified exact capacity.
+- Keep benchmark reports tied to the native system snapshot used for workload planning.
+- Align Swift and native last-level-cache availability rules.
+
+### Validation status
+
+- Intel runtime, ASan, TSan, CLI smoke, package consumer, and GUI launch smoke: verified.
+- Apple Silicon arm64 cross-build and Universal 2 slice verification: verified.
+- Physical Apple Silicon GUI/CLI validation remains pending before stable v0.1.0.
+
 ## [0.1.0-rc.1] - 2026-07-13
 
 ### Added

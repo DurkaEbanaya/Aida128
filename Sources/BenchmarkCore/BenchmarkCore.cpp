@@ -170,12 +170,49 @@ struct PlatformDiscovery {
     std::string memory_manufacturer;
     std::string memory_part_number;
     std::string platform_name;
+    std::string manufacturer;
+    std::string board_identifier;
     std::string motherboard;
     std::string chipset;
     std::string firmware;
     uint32_t memory_data_rate = 0;
     uint32_t memory_module_count = 0;
 };
+
+struct AppleSoCSpecification {
+    const char *name;
+    const char *identifier;
+    const char *process_node;
+    const char *instruction_set;
+    const char *memory_technology;
+    uint32_t performance_max_megahertz;
+    uint32_t efficiency_max_megahertz;
+    uint32_t neural_engine_cores;
+    uint32_t memory_bandwidth_gigabytes_per_second;
+    uint32_t memory_data_rate_mtps;
+    uint64_t system_cache_bytes;
+};
+
+constexpr AppleSoCSpecification kAppleM5Specification{
+    "Apple M5", "T8142", "TSMC N3P (3 nm)", "ARMv9.2-A (AArch64)",
+    "LPDDR5X unified memory", 4608, 3048, 16, 153, 9600,
+    32ULL * 1024 * 1024
+};
+
+const AppleSoCSpecification *apple_soc_specification(const std::string &cpu_name) {
+    return cpu_name == kAppleM5Specification.name ? &kAppleM5Specification : nullptr;
+}
+
+void store_provenance(
+    A128Provenance &output,
+    A128ProvenanceKind kind,
+    const char *source,
+    const char *detail
+) {
+    output.kind = kind;
+    copy_string(output.source, sizeof(output.source), source);
+    copy_string(output.detail, sizeof(output.detail), detail);
+}
 
 PlatformDiscovery discover_platform() {
     PlatformDiscovery result;
@@ -184,6 +221,8 @@ PlatformDiscovery discover_platform() {
         result.platform_name = first_registry_string(root, CFSTR("product-name"));
         const std::string manufacturer = first_registry_string(root, CFSTR("manufacturer"));
         const std::string board_id = first_registry_string(root, CFSTR("board-id"));
+        result.manufacturer = manufacturer;
+        result.board_identifier = board_id;
         if (!manufacturer.empty() || !board_id.empty()) {
             result.motherboard = manufacturer + (manufacturer.empty() || board_id.empty() ? "" : " / ") + board_id;
         }
@@ -817,7 +856,7 @@ constexpr uint64_t saturating_multiply(uint64_t value, uint64_t factor) {
 }
 
 constexpr bool is_usable_l3_capacity(uint64_t l2_bytes, uint64_t l3_bytes) {
-    return l3_bytes > 0 && l2_bytes <= l3_bytes / 2;
+    return l2_bytes > 0 && l2_bytes <= l3_bytes / 2;
 }
 
 bool has_usable_l3(const A128SystemInfo &system) {
@@ -828,6 +867,7 @@ static_assert(saturating_multiply(7, 4) == 28);
 static_assert(saturating_multiply(std::numeric_limits<uint64_t>::max(), 2) ==
               std::numeric_limits<uint64_t>::max());
 static_assert(!is_usable_l3_capacity(1, 0));
+static_assert(!is_usable_l3_capacity(8, 8));
 static_assert(!is_usable_l3_capacity(8, 15));
 static_assert(is_usable_l3_capacity(8, 16));
 
@@ -975,6 +1015,120 @@ extern "C" A128Status a128_read_system_info(A128SystemInfo *output) noexcept {
         return A128_STATUS_SYSTEM_ERROR;
     }
     return A128_STATUS_OK;
+    } catch (const std::bad_alloc &) {
+        return A128_STATUS_ALLOCATION_FAILED;
+    } catch (...) {
+        return A128_STATUS_SYSTEM_ERROR;
+    }
+}
+
+extern "C" A128Status a128_read_system_info_v2(
+    A128SystemInfoV2 *output,
+    size_t output_size
+) noexcept {
+    try {
+        if (!output || output_size < A128_SYSTEM_INFO_V2_MIN_SIZE) {
+            return A128_STATUS_INVALID_ARGUMENT;
+        }
+
+        A128SystemInfoV2 discovered{};
+        discovered.struct_size = static_cast<uint32_t>(std::min(output_size, sizeof(discovered)));
+        discovered.schema_version = A128_SYSTEM_INFO_V2_SCHEMA_VERSION;
+        const A128Status legacy_status = a128_read_system_info(&discovered.legacy);
+        if (legacy_status != A128_STATUS_OK) return legacy_status;
+        discovered.physical_core_count = static_cast<uint32_t>(read_uint64_sysctl("hw.physicalcpu"));
+        copy_string(discovered.hardware_model, sizeof(discovered.hardware_model), read_string_sysctl("hw.model"));
+        const PlatformDiscovery platform = discover_platform();
+        copy_string(discovered.board_identifier, sizeof(discovered.board_identifier), platform.board_identifier);
+        copy_string(discovered.system_firmware, sizeof(discovered.system_firmware), platform.firmware);
+
+#if defined(__aarch64__)
+        copy_string(discovered.soc_name, sizeof(discovered.soc_name), discovered.legacy.cpu_name);
+        const AppleSoCSpecification *specification = apple_soc_specification(discovered.legacy.cpu_name);
+        if (specification) {
+            copy_string(discovered.soc_identifier, sizeof(discovered.soc_identifier), specification->identifier);
+            copy_string(discovered.process_node, sizeof(discovered.process_node), specification->process_node);
+            copy_string(discovered.instruction_set, sizeof(discovered.instruction_set), specification->instruction_set);
+            copy_string(discovered.memory_technology, sizeof(discovered.memory_technology), specification->memory_technology);
+            discovered.performance_max_megahertz = specification->performance_max_megahertz;
+            discovered.efficiency_max_megahertz = specification->efficiency_max_megahertz;
+            discovered.neural_engine_core_count = specification->neural_engine_cores;
+            discovered.memory_bandwidth_gigabytes_per_second = specification->memory_bandwidth_gigabytes_per_second;
+            discovered.memory_data_rate_mtps = specification->memory_data_rate_mtps;
+            discovered.system_cache_bytes = specification->system_cache_bytes;
+            store_provenance(
+                discovered.soc_provenance, A128_PROVENANCE_MAPPED,
+                "https://www.apple.com/macbook-air/specs/ + Aida128 SoC catalog",
+                "SoC identity, process, and ISA are catalog metadata; runtime core topology is reported separately."
+            );
+            store_provenance(
+                discovered.clock_provenance, A128_PROVENANCE_MAPPED,
+                "https://www.notebookcheck.net/Analysis-of-the-Apple-M5-SoC-Apple-silicon-extends-its-lead-over-AMD-Intel-and-Qualcomm.1144213.0.html",
+                "Maximum observed P/E clocks; these are not live frequencies reported by macOS."
+            );
+            store_provenance(
+                discovered.memory_provenance, A128_PROVENANCE_MAPPED,
+                "https://www.apple.com/macbook-air/specs/ + Aida128 SoC catalog",
+                "Unified-memory bandwidth is an Apple specification; technology and data rate are catalog data."
+            );
+            store_provenance(
+                discovered.system_cache_provenance, A128_PROVENANCE_EXPERIMENTAL,
+                "https://www.michaelstinkerings.org/apple-m5-gpu-roofline-analysis/",
+                "Approximate 32 MiB SLC capacity. Benchmark values are CPU-observed system-cache performance."
+            );
+        }
+
+        for (uint32_t index = 0; index < A128_MAX_PERFORMANCE_LEVELS; ++index) {
+            char key[64]{};
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.physicalcpu", index);
+            const uint64_t physical = read_uint64_sysctl(key);
+            if (physical == 0) break;
+            A128PerformanceLevel &level = discovered.performance_levels[discovered.performance_level_count++];
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.name", index);
+            copy_string(level.name, sizeof(level.name), read_string_sysctl(key));
+            level.physical_core_count = static_cast<uint32_t>(physical);
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.logicalcpu", index);
+            level.logical_cpu_count = static_cast<uint32_t>(read_uint64_sysctl(key));
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.l1icachesize", index);
+            level.l1_instruction_bytes = read_uint64_sysctl(key);
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.l1dcachesize", index);
+            level.l1_data_bytes = read_uint64_sysctl(key);
+            std::snprintf(key, sizeof(key), "hw.perflevel%u.l2cachesize", index);
+            level.l2_bytes = read_uint64_sysctl(key);
+            const std::string level_name = level.name;
+            if (level_name == "Performance" || level_name == "P") {
+                discovered.performance_core_count += level.physical_core_count;
+            } else if (level_name == "Efficiency" || level_name == "E") {
+                discovered.efficiency_core_count += level.physical_core_count;
+            }
+        }
+        if (discovered.performance_level_count > 0) {
+            store_provenance(
+                discovered.topology_provenance, A128_PROVENANCE_REPORTED,
+                "sysctl hw.perflevel*",
+                "Core groups and private/shared cache capacities reported by the running macOS kernel."
+            );
+        }
+#else
+        copy_string(discovered.instruction_set, sizeof(discovered.instruction_set), "x86_64 AVX2");
+        store_provenance(
+            discovered.topology_provenance, A128_PROVENANCE_REPORTED,
+            "CPUID + sysctl hw.logicalcpu/hw.physicalcpu",
+            "Scheduler-visible host topology."
+        );
+#endif
+
+        if (!platform.firmware.empty()) {
+            store_provenance(
+                discovered.firmware_provenance,
+                platform.firmware.find("Synthetic") == 0 ? A128_PROVENANCE_SYNTHETIC : A128_PROVENANCE_REPORTED,
+                "IODeviceTree /rom",
+                "Firmware identity exposed through the platform registry."
+            );
+        }
+
+        std::memcpy(output, &discovered, std::min(output_size, sizeof(discovered)));
+        return A128_STATUS_OK;
     } catch (const std::bad_alloc &) {
         return A128_STATUS_ALLOCATION_FAILED;
     } catch (...) {

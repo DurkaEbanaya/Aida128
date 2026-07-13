@@ -10,7 +10,7 @@ The native core owns cache discovery and working-set planning. Callers never pro
 
 - L1: half the discovered L1D capacity.
 - L2: half L2, and always at least twice L1D.
-- L3: half the discovered LLC, and always at least twice L2. If macOS reports no LLC capacity, or the reported capacity cannot contain a working set larger than L2, L3 is unavailable and is not measured or inferred.
+- Last-level cache: half the verified target capacity and at least twice L2. On Intel this is CPU L3. On Apple Silicon the corresponding presentation is the SoC System Level Cache (SLC), shared with other agents. Experimental catalog estimates are display-only and do not enable benchmark planning; an SLC run requires a runtime-verified exact capacity.
 - Memory: at least 128 MiB and four times L3, capped at one eighth of physical memory.
 
 Every working set is aligned to a 64-byte cache line. Allocation and page prefaulting happen before timed regions.
@@ -38,7 +38,7 @@ The V2 run contract accepts requested level and metric masks. The native planner
 
 The user-selected duration is a total run budget divided across selected stages and samples. Each sample retains a physical minimum of 10 ms, so calibration, allocation, prefaulting, scheduling, and this lower bound can make wall-clock duration slightly longer than the selected budget. Native progress callbacks are emitted synchronously by the orchestration thread after real calibration/sample/stage events; the GUI does not synthesize intermediate results.
 
-Aggregate L3 exists only with a discovered LLC capacity. It uses a private verified L3-sized working set per worker and limits the worker count so the combined footprint does not exceed that capacity. This avoids partitioning each worker below private L2 capacity while also avoiding an aggregate footprint larger than LLC.
+Aggregate last-level-cache testing exists only with a verified capacity. It limits the worker count so the combined footprint does not exceed that capacity. On Apple Silicon the result is explicitly CPU-observed SLC performance, not total SLC throughput available to the GPU or Neural Engine.
 
 Latency remains single-threaded because aggregating independent pointer chains is not the latency of one dependent access. macOS does not expose a supported hard-affinity API, so the benchmark does not claim that latency ran on a specific P-core or E-core.
 

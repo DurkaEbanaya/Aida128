@@ -17,6 +17,7 @@ A native macOS cache and memory benchmark inspired by the compact workflow of AI
 - Windows 10-era Fluent-inspired interface with Acrylic, Reveal, light/dark themes, and a resizable window.
 - JSON export and a separate CLI runner.
 - Detailed CPUID, cache, memory, SMBIOS, PCI, and ISA information where macOS exposes trustworthy data.
+- Apple Silicon SoC topology, unified memory, GPU, firmware, and System Cache metadata with source details on hover.
 
 ## Platform status
 
@@ -49,7 +50,7 @@ swift run -c release aida128-bench --format json --output result.json
 
 ```bash
 chmod +x scripts/build-universal.sh
-VERSION=0.1.0-rc.1 scripts/build-universal.sh
+VERSION=0.1.0-rc.2 scripts/build-universal.sh
 ```
 
 Artifacts are written to `dist/`. The app is ad-hoc signed because the project does not have a Developer ID certificate. On first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.
@@ -66,6 +67,7 @@ The benchmark does not multiply results to imitate another product. The measured
 - Current dynamic clocks, DRAM primary timings, and command rate are not exposed by public macOS APIs.
 - On OpenCore systems, spoofed SMBIOS values are identified rather than presented as the physical motherboard or BIOS.
 - macOS does not expose supported hard CPU affinity; scheduler migration remains visible through result spread.
+- Apple Silicon System Cache metadata exposes provenance in tooltips. Experimental catalog capacities do not enable benchmark execution; unknown or unverified SLC capacities remain `N/A` instead of being guessed.
 
 ## Development
 

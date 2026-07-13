@@ -108,6 +108,78 @@ typedef struct A128SystemInfo {
     uint32_t memory_module_count;
 } A128SystemInfo;
 
+enum {
+    A128_MAX_PERFORMANCE_LEVELS = 4,
+    A128_SYSTEM_INFO_V2_SCHEMA_VERSION = 2
+};
+
+typedef enum A128ProvenanceKind {
+    A128_PROVENANCE_UNAVAILABLE = 0,
+    A128_PROVENANCE_REPORTED = 1,
+    A128_PROVENANCE_DERIVED = 2,
+    A128_PROVENANCE_MAPPED = 3,
+    A128_PROVENANCE_EXPERIMENTAL = 4,
+    A128_PROVENANCE_SYNTHETIC = 5
+} A128ProvenanceKind;
+
+typedef struct A128Provenance {
+    A128ProvenanceKind kind;
+    char source[256];
+    char detail[256];
+} A128Provenance;
+
+typedef struct A128PerformanceLevel {
+    char name[32];
+    uint32_t physical_core_count;
+    uint32_t logical_cpu_count;
+    uint64_t l1_instruction_bytes;
+    uint64_t l1_data_bytes;
+    uint64_t l2_bytes;
+} A128PerformanceLevel;
+
+typedef struct A128SystemInfoV2 {
+    /* Provider-written byte count and schema version. Callers pass their writable
+       capacity separately through output_size and do not initialize these fields. */
+    uint32_t struct_size;
+    uint32_t schema_version;
+    A128SystemInfo legacy;
+    char soc_name[128];
+    char soc_identifier[64];
+    char process_node[32];
+    char instruction_set[64];
+    char hardware_model[64];
+    char board_identifier[128];
+    char memory_technology[64];
+    char gpu_name[128];
+    char system_firmware[128];
+    char os_loader_version[128];
+    uint32_t physical_core_count;
+    uint32_t performance_core_count;
+    uint32_t efficiency_core_count;
+    uint32_t performance_max_megahertz;
+    uint32_t efficiency_max_megahertz;
+    uint32_t gpu_core_count;
+    uint32_t gpu_max_megahertz;
+    uint32_t neural_engine_core_count;
+    uint32_t memory_bandwidth_gigabytes_per_second;
+    uint32_t memory_data_rate_mtps;
+    uint32_t performance_level_count;
+    A128PerformanceLevel performance_levels[A128_MAX_PERFORMANCE_LEVELS];
+    uint64_t system_cache_bytes;
+    A128Provenance soc_provenance;
+    A128Provenance clock_provenance;
+    A128Provenance topology_provenance;
+    A128Provenance memory_provenance;
+    A128Provenance gpu_provenance;
+    A128Provenance system_cache_provenance;
+    A128Provenance firmware_provenance;
+} A128SystemInfoV2;
+
+/* Every successful V2 read contains these fields. Later fields are present only
+   when struct_size reaches the end of the corresponding field. */
+#define A128_SYSTEM_INFO_V2_MIN_SIZE \
+    (offsetof(A128SystemInfoV2, legacy) + sizeof(A128SystemInfo))
+
 typedef struct A128Measurement {
     A128Level level;
     A128Scope scope;
@@ -143,6 +215,10 @@ typedef struct A128Report {
 
 A128Configuration a128_default_configuration(void) A128_NOEXCEPT;
 A128Status a128_read_system_info(A128SystemInfo *output) A128_NOEXCEPT;
+A128Status a128_read_system_info_v2(
+    A128SystemInfoV2 *output,
+    size_t output_size
+) A128_NOEXCEPT;
 A128Status a128_run_benchmark(const A128Configuration *configuration, A128Report *output) A128_NOEXCEPT;
 A128Status a128_run_benchmark_v2(
     const A128RunConfiguration *configuration,

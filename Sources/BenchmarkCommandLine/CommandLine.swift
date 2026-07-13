@@ -171,13 +171,13 @@ public enum ReportRenderer {
             "Architecture: \(report.system.architecture), backend: \(report.system.backend)",
             "Aggregate throughput workers: \(report.throughputWorkerCount)",
             "",
-            "\(column("Level", width: 12)) \(column("Read", width: 12)) \(column("Write", width: 12)) \(column("Copy", width: 12)) \(column("Latency", width: 12)) \(column("Spread", width: 9))",
+            "\(column("Level", width: 20)) \(column("Read", width: 12)) \(column("Write", width: 12)) \(column("Copy", width: 12)) \(column("Latency", width: 12)) \(column("Spread", width: 9))",
         ]
         let order: [CacheLevel] = [.memory, .l1, .l2, .l3]
         for level in order {
             guard let value = report.aidaMeasurements.first(where: { $0.level == level }) else {
                 if !report.system.isAvailable(level) {
-                    lines.append("\(column(level.rawValue, width: 12, rightAligned: false)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("—", width: 9))")
+                    lines.append("\(column(report.system.displayName(for: level), width: 20, rightAligned: false)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("—", width: 9))")
                 }
                 continue
             }
@@ -186,7 +186,7 @@ public enum ReportRenderer {
             let copy = metric(value.copyGigabytesPerSecond, unit: "GB/s")
             let latency = metric(value.latencyNanoseconds, unit: "ns")
             let spread = String(format: "%.1f%%", value.maximumRelativeSpread * 100)
-            lines.append("\(column(value.level.rawValue, width: 12, rightAligned: false)) \(column(read, width: 12)) \(column(write, width: 12)) \(column(copy, width: 12)) \(column(latency, width: 12)) \(column(spread, width: 9))")
+            lines.append("\(column(report.system.displayName(for: value.level), width: 20, rightAligned: false)) \(column(read, width: 12)) \(column(write, width: 12)) \(column(copy, width: 12)) \(column(latency, width: 12)) \(column(spread, width: 9))")
         }
         return lines.joined(separator: "\n")
     }

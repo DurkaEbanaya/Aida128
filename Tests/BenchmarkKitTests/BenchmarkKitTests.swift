@@ -1,4 +1,5 @@
 import BenchmarkKit
+import BenchmarkCore
 import Foundation
 import Testing
 
@@ -35,6 +36,81 @@ struct NativeBenchmarkTests {
     #expect(information.backend == "ARM NEON cached")
     #expect(information.cpuFeatures.contains("NEON"))
     #endif
+    #expect(information.hardwareMetadata != nil)
+    #expect(information.hardwareMetadata?.physicalCoreCount ?? 0 > 0)
+    #expect(information.displayName(for: .l3) == (information.architecture == "arm64"
+        ? "System Cache (SLC)" : "L3 Cache"))
+}
+
+@Test func extendedSystemInfoHonorsCallerBufferSize() {
+    let minimumSize = MemoryLayout<A128SystemInfoV2>.offset(of: \A128SystemInfoV2.legacy)! +
+        MemoryLayout<A128SystemInfo>.size
+    let fullSize = MemoryLayout<A128SystemInfoV2>.size
+    let guardSize = 64
+    let storage = UnsafeMutableRawPointer.allocate(
+        byteCount: fullSize + guardSize,
+        alignment: MemoryLayout<A128SystemInfoV2>.alignment
+    )
+    defer { storage.deallocate() }
+    storage.initializeMemory(as: UInt8.self, repeating: 0xA5, count: fullSize + guardSize)
+    let output = storage.assumingMemoryBound(to: A128SystemInfoV2.self)
+    #expect(a128_read_system_info_v2(output, minimumSize - 1) == A128_STATUS_INVALID_ARGUMENT)
+    let status = a128_read_system_info_v2(output, minimumSize)
+    #expect(status == A128_STATUS_OK)
+    #expect(output.pointee.struct_size == UInt32(minimumSize))
+    #expect(output.pointee.schema_version == UInt32(A128_SYSTEM_INFO_V2_SCHEMA_VERSION))
+    let guardBytes = UnsafeRawBufferPointer(
+        start: storage + minimumSize,
+        count: fullSize + guardSize - minimumSize
+    )
+    #expect(guardBytes.allSatisfy { $0 == 0xA5 })
+
+    storage.initializeMemory(as: UInt8.self, repeating: 0xA5, count: fullSize + guardSize)
+    #expect(a128_read_system_info_v2(output, fullSize + guardSize) == A128_STATUS_OK)
+    #expect(output.pointee.struct_size == UInt32(fullSize))
+    let oversizedGuard = UnsafeRawBufferPointer(start: storage + fullSize, count: guardSize)
+    #expect(oversizedGuard.allSatisfy { $0 == 0xA5 })
+}
+
+@Test func legacyABILayoutIsStable() {
+    #expect(MemoryLayout<A128SystemInfo>.size == 1968)
+    #expect(MemoryLayout<A128Report>.size == 2488)
+    #expect(MemoryLayout<A128Report>.offset(of: \A128Report.system) == 0)
+    #expect(MemoryLayout<A128Report>.offset(of: \A128Report.measurements) == 1968)
+    #expect(MemoryLayout<A128Report>.offset(of: \A128Report.measurement_count) == 2480)
+}
+
+@Test func reportsWithoutHardwareMetadataStillDecode() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    let report = BenchmarkReport(system: system, measurements: [], throughputWorkerCount: 1)
+    let encoded = try JSONEncoder().encode(report)
+    var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    var legacySystem = try #require(object["system"] as? [String: Any])
+    legacySystem.removeValue(forKey: "hardwareMetadata")
+    object["system"] = legacySystem
+    let legacyData = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(BenchmarkReport.self, from: legacyData)
+    #expect(decoded.system.hardwareMetadata == nil)
+    #expect(decoded.system.architecture == system.architecture)
+}
+
+@Test func swiftAvailabilityMatchesNativeLLCContainmentBoundary() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    func replacingCacheHierarchy(l2Bytes: UInt64, l3Bytes: UInt64) throws -> SystemInformation {
+        var object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(system)) as? [String: Any]
+        )
+        object["l2Bytes"] = l2Bytes
+        object["l3Bytes"] = l3Bytes
+        return try JSONDecoder().decode(
+            SystemInformation.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+    }
+    let unavailable = try replacingCacheHierarchy(l2Bytes: 8, l3Bytes: 15)
+    let available = try replacingCacheHierarchy(l2Bytes: 8, l3Bytes: 16)
+    #expect(!unavailable.isAvailable(.l3))
+    #expect(available.isAvailable(.l3))
 }
 
 @Test func selectedCellRunsOnlyRequestedStage() throws {

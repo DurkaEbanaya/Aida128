@@ -114,6 +114,16 @@ struct BenchmarkView: View {
     }
 
     private var systemPanel: some View {
+        Group {
+            if model.systemInformation?.architecture == "arm64" {
+                appleSiliconSystemPanel
+            } else {
+                intelSystemPanel
+            }
+        }
+    }
+
+    private var intelSystemPanel: some View {
         VStack(spacing: 3) {
             infoRow("CPU Type", cpuTypeText)
             infoRow("CPUID", cpuidText)
@@ -130,6 +140,41 @@ struct BenchmarkView: View {
             infoRow("Chipset IDs", model.systemInformation?.chipset.nilIfEmpty ?? "Unavailable")
             infoRow("Platform", platformText)
             infoRow("Firmware", model.systemInformation?.firmware.nilIfEmpty ?? "Unavailable")
+            infoRow("Benchmark Mode", model.report.map {
+                "\($0.system.backend) · \($0.throughputWorkerCount) workers · selected total time \(model.totalDurationSeconds)s"
+            } ?? (model.systemInformation?.backend ?? "Detecting SIMD backend"))
+            infoRow("macOS-usable ISA", model.systemInformation?.cpuFeatures.nilIfEmpty ?? "Unavailable", height: 58)
+        }
+        .padding(10)
+        .background(palette.surface)
+        .overlay(Rectangle().stroke(palette.border, lineWidth: 1))
+    }
+
+    private var appleSiliconSystemPanel: some View {
+        let metadata = model.systemInformation?.hardwareMetadata
+        return VStack(spacing: 3) {
+            infoRow("SoC", appleSoCText, help: metadata?.socProvenance.tooltip)
+            infoRow("CPU Architecture", metadata?.instructionSet.nilIfEmpty ?? "AArch64")
+            infoRow("CPU Topology", appleTopologyText, help: metadata?.topologyProvenance.tooltip)
+            infoRow("Maximum CPU Clocks", appleClockText, help: metadata?.clockProvenance.tooltip)
+            ForEach(Array((metadata?.performanceLevels ?? []).enumerated()), id: \.offset) { index, level in
+                infoRow(
+                    performanceLevelLabel(level, index: index),
+                    performanceLevelText(level),
+                    help: metadata?.topologyProvenance.tooltip
+                )
+            }
+            infoRow("System Cache", appleSystemCacheText, help: metadata?.systemCacheProvenance.tooltip)
+            infoRow("Unified Memory", appleMemoryText, help: metadata?.memoryProvenance.tooltip)
+            infoRow("Memory Packaging", "On-package unified memory · physical die organization not exposed by macOS")
+            infoRow("DRAM Timings / CR", "Not exposed by macOS")
+            infoRow("Integrated GPU", appleGPUText, help: metadata?.gpuProvenance.tooltip)
+            infoRow("Neural Engine", appleNeuralEngineText, help: metadata?.socProvenance.tooltip)
+            infoRow("Hardware Model", metadata?.hardwareModel.nilIfEmpty ?? "Unavailable", help: metadata?.hardwareModelProvenance?.tooltip)
+            infoRow("SoC ID", metadata?.socIdentifier.nilIfEmpty ?? "Unavailable", help: metadata?.socProvenance.tooltip)
+            infoRow("Board ID", metadata?.boardIdentifier.nilIfEmpty ?? "Unavailable")
+            infoRow("System Firmware", metadata?.systemFirmware.nilIfEmpty ?? "Unavailable", help: metadata?.firmwareProvenance.tooltip)
+            infoRow("OS Loader", metadata?.osLoaderVersion.nilIfEmpty ?? "Unavailable", help: metadata?.osLoaderProvenance?.tooltip)
             infoRow("Benchmark Mode", model.report.map {
                 "\($0.system.backend) · \($0.throughputWorkerCount) workers · selected total time \(model.totalDurationSeconds)s"
             } ?? (model.systemInformation?.backend ?? "Detecting SIMD backend"))
@@ -174,7 +219,7 @@ struct BenchmarkView: View {
             action: { model.runRow(level) }
         ) {
             HStack {
-                Text(level.rawValue).fontWeight(.medium)
+                Text(model.systemInformation?.displayName(for: level) ?? level.rawValue).fontWeight(.medium)
                 Spacer()
                 Image(systemName: "play.fill").font(.caption2)
             }
@@ -182,6 +227,7 @@ struct BenchmarkView: View {
             .frame(width: 126)
             .frame(minHeight: 28)
         }
+        .help(levelHelp(level))
     }
 
     private func benchmarkCell(level: CacheLevel, metric: BenchmarkMetric) -> some View {
@@ -195,6 +241,7 @@ struct BenchmarkView: View {
                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .trailing)
                 .padding(.horizontal, 7)
         }
+        .help(levelHelp(level))
     }
 
     private func resultText(level: CacheLevel, metric: BenchmarkMetric) -> Text {
@@ -214,7 +261,12 @@ struct BenchmarkView: View {
         return Text(String(format: "%.2f GB/s", value))
     }
 
-    private func infoRow(_ label: String, _ value: String, height: CGFloat = 23) -> some View {
+    private func infoRow(
+        _ label: String,
+        _ value: String,
+        height: CGFloat = 23,
+        help: String? = nil
+    ) -> some View {
         HStack(spacing: 0) {
             Text(label)
                 .foregroundStyle(palette.secondaryText)
@@ -229,6 +281,7 @@ struct BenchmarkView: View {
                 .overlay(Rectangle().stroke(palette.border.opacity(0.75), lineWidth: 0.5))
         }
         .frame(height: height)
+        .help(help ?? "")
     }
 
     private var progressTitle: String {
@@ -242,7 +295,8 @@ struct BenchmarkView: View {
         case .stageCompleted: "Completed"
         case .runCompleted: "Completed"
         }
-        return "\(phase) · \(progress.level.rawValue) · \(metric.rawValue)"
+        let level = model.systemInformation?.displayName(for: progress.level) ?? progress.level.rawValue
+        return "\(phase) · \(level) · \(metric.rawValue)"
     }
 
     private var cpuTypeText: String {
@@ -292,7 +346,81 @@ struct BenchmarkView: View {
 
     private var platformText: String {
         guard let system = model.systemInformation else { return "—" }
-        return "\(system.platformName) · SMBIOS supplied by OpenCore/Acidanthera"
+        if system.firmware.contains("Synthetic SMBIOS") {
+            return "\(system.platformName) · SMBIOS supplied by OpenCore/Acidanthera"
+        }
+        return system.platformName.nilIfEmpty ?? "Unavailable"
+    }
+
+    private var appleSoCText: String {
+        guard let metadata = model.systemInformation?.hardwareMetadata else { return "Apple Silicon" }
+        return [metadata.socName, metadata.processNode].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private var appleTopologyText: String {
+        guard let system = model.systemInformation, let metadata = system.hardwareMetadata else { return "Unavailable" }
+        let total = metadata.physicalCoreCount > 0 ? metadata.physicalCoreCount : system.logicalCPUCount
+        if metadata.performanceCoreCount > 0 || metadata.efficiencyCoreCount > 0 {
+            return "\(total) cores / \(system.logicalCPUCount) threads · \(metadata.performanceCoreCount)P + \(metadata.efficiencyCoreCount)E"
+        }
+        return "\(total) cores / \(system.logicalCPUCount) threads"
+    }
+
+    private var appleClockText: String {
+        guard let metadata = model.systemInformation?.hardwareMetadata,
+              metadata.performanceMaxMegahertz > 0 else { return "Unavailable" }
+        let p = Double(metadata.performanceMaxMegahertz) / 1000
+        let e = Double(metadata.efficiencyMaxMegahertz) / 1000
+        return String(format: "P up to %.3g GHz · E up to %.3g GHz", p, e)
+    }
+
+    private func performanceLevelLabel(_ level: CPUPerformanceLevel, index: Int) -> String {
+        if !level.name.isEmpty { return "\(level.name) Cores" }
+        return "CPU Group \(index + 1)"
+    }
+
+    private func performanceLevelText(_ level: CPUPerformanceLevel) -> String {
+        "\(level.physicalCoreCount) cores · L1I \(bytes(level.l1InstructionBytes))/core · L1D \(bytes(level.l1DataBytes))/core · shared L2 \(bytes(level.l2Bytes))"
+    }
+
+    private var appleSystemCacheText: String {
+        guard let metadata = model.systemInformation?.hardwareMetadata, metadata.systemCacheBytes > 0 else {
+            return "Capacity unavailable"
+        }
+        return "System Level Cache · approximately \(bytes(metadata.systemCacheBytes))"
+    }
+
+    private var appleMemoryText: String {
+        guard let system = model.systemInformation else { return "—" }
+        guard let metadata = system.hardwareMetadata else { return "\(bytes(system.memoryBytes)) Unified Memory" }
+        var parts = ["\(bytes(system.memoryBytes)) Unified Memory"]
+        if !metadata.memoryTechnology.isEmpty { parts.append(metadata.memoryTechnology) }
+        if metadata.memoryBandwidthGigabytesPerSecond > 0 {
+            parts.append("\(metadata.memoryBandwidthGigabytesPerSecond) GB/s specified bandwidth")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var appleGPUText: String {
+        guard let metadata = model.systemInformation?.hardwareMetadata else { return "Unavailable" }
+        guard let gpuName = metadata.gpuName?.nilIfEmpty else { return "Unavailable" }
+        var parts = [gpuName]
+        if metadata.gpuCoreCount > 0 { parts.append("\(metadata.gpuCoreCount) cores") }
+        if metadata.gpuMaxMegahertz > 0 { parts.append("up to \(metadata.gpuMaxMegahertz) MHz") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var appleNeuralEngineText: String {
+        guard let cores = model.systemInformation?.hardwareMetadata?.neuralEngineCoreCount, cores > 0 else {
+            return "Unavailable"
+        }
+        return "\(cores) cores"
+    }
+
+    private func levelHelp(_ level: CacheLevel) -> String {
+        guard level == .l3, let system = model.systemInformation, system.architecture == "arm64" else { return "" }
+        return system.hardwareMetadata?.systemCacheProvenance.tooltip ??
+            "System Level Cache shared by SoC agents. Capacity is not exposed by macOS."
     }
 
     private func bytes(_ value: UInt64) -> String {

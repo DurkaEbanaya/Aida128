@@ -66,7 +66,8 @@ func invalidGrammarIsRejected(_ arguments: [String]) {
         throughputWorkerCount: 1
     )
     let rendered = String(decoding: try ReportRenderer.render(report, format: .text), as: UTF8.self)
-    for label in ["Memory", "L1 Cache", "L2 Cache", "L3 Cache"] {
+    let cacheLabel = report.system.architecture == "arm64" ? "System Cache (SLC)" : "L3 Cache"
+    for label in ["Memory", "L1 Cache", "L2 Cache", cacheLabel] {
         #expect(rendered.contains(label))
     }
     #expect(!rendered.contains("Single worker hierarchy"))
@@ -78,6 +79,6 @@ func invalidGrammarIsRejected(_ arguments: [String]) {
     guard !system.isAvailable(.l3) else { return }
     let report = BenchmarkReport(system: system, measurements: [], throughputWorkerCount: 1)
     let rendered = String(decoding: try ReportRenderer.render(report, format: .text), as: UTF8.self)
-    #expect(rendered.contains("L3 Cache"))
+    #expect(rendered.contains(system.displayName(for: .l3)))
     #expect(rendered.contains("N/A"))
 }

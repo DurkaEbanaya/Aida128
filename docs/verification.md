@@ -40,6 +40,10 @@ The host CPU is heterogeneous. Public macOS APIs do not provide hard binding to 
 
 Verified on GitHub's Apple M1 virtual runner in CI run `29249845148`. Raw `sysctl` output reported 128 KiB L1D and 12 MiB L2 through both aggregate and `hw.perflevel0` keys, while `hw.cacheconfig`, `hw.cachesize`, and `hw.l3cachesize` reported no L3/LLC capacity. The planner therefore treats L3 as unavailable on that host instead of inferring a size from L2.
 
+CI run `29257079821` additionally verified `hw.perflevel*` topology/cache keys and sanitized `system_profiler` fields for chip name, hardware model, system firmware, and OS loader. The hosted VM exposes no GPU record, so GPU metadata remains optional.
+
+For the base Apple M5 catalog, Apple specifications provide the CPU and Neural Engine configuration and memory bandwidth. Maximum P/E clocks come from a device analysis, while the approximately 32 MiB SLC capacity is experimental third-party cache-analysis data. Those values are typed as mapped or experimental and expose their source in UI tooltips; they are not presented as live macOS readings. GPU identity and enabled core count are shown only when the running macOS system reports them through `system_profiler`.
+
 ## Extended platform information
 
 - Raw CPUID signature is `0x000B0671`: family 6, model `0xB7`, stepping 1. The corresponding verified platform is Raptor Lake-S / LGA1700.

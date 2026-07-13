@@ -1,4 +1,5 @@
 import BenchmarkCore
+import Darwin
 import Foundation
 
 public struct BenchmarkConfiguration: Sendable {
@@ -46,14 +47,85 @@ public struct SystemInformation: Codable, Sendable {
     public let motherboard: String
     public let chipset: String
     public let firmware: String
+    public let hardwareMetadata: HardwareMetadata?
 
     public func isAvailable(_ level: CacheLevel) -> Bool {
-        level != .l3 || (l3Bytes > 0 && l2Bytes <= l3Bytes / 2)
+        level != .l3 || (l2Bytes > 0 && l2Bytes <= l3Bytes / 2)
     }
 
     public var availableLevels: Set<CacheLevel> {
         Set(CacheLevel.allCases.filter(isAvailable))
     }
+
+    public func displayName(for level: CacheLevel) -> String {
+        level == .l3 && architecture == "arm64" ? "System Cache (SLC)" : level.rawValue
+    }
+
+    public func replacingHardwareMetadata(_ metadata: HardwareMetadata?) -> SystemInformation {
+        BenchmarkRunner.replacingMetadata(in: self, with: metadata)
+    }
+}
+
+public enum ProvenanceKind: String, Codable, Sendable {
+    case unavailable
+    case reported
+    case derived
+    case mapped
+    case experimental
+    case synthetic
+}
+
+public struct DiscoveryProvenance: Codable, Sendable {
+    public let kind: ProvenanceKind
+    public let source: String
+    public let detail: String
+
+    public var tooltip: String {
+        [detail, source.isEmpty ? nil : "Source: \(source)"].compactMap { $0 }.joined(separator: "\n")
+    }
+}
+
+public struct CPUPerformanceLevel: Codable, Sendable {
+    public let name: String
+    public let physicalCoreCount: UInt32
+    public let logicalCPUCount: UInt32
+    public let l1InstructionBytes: UInt64
+    public let l1DataBytes: UInt64
+    public let l2Bytes: UInt64
+}
+
+public struct HardwareMetadata: Codable, Sendable {
+    public let socName: String
+    public let socIdentifier: String
+    public let processNode: String
+    public let instructionSet: String
+    public let hardwareModel: String
+    public let boardIdentifier: String
+    public let memoryTechnology: String
+    public let gpuName: String?
+    public let systemFirmware: String
+    public let osLoaderVersion: String
+    public let physicalCoreCount: UInt32
+    public let performanceCoreCount: UInt32
+    public let efficiencyCoreCount: UInt32
+    public let performanceMaxMegahertz: UInt32
+    public let efficiencyMaxMegahertz: UInt32
+    public let gpuCoreCount: UInt32
+    public let gpuMaxMegahertz: UInt32
+    public let neuralEngineCoreCount: UInt32
+    public let memoryBandwidthGigabytesPerSecond: UInt32
+    public let memoryDataRateMTPS: UInt32
+    public let performanceLevels: [CPUPerformanceLevel]
+    public let systemCacheBytes: UInt64
+    public let socProvenance: DiscoveryProvenance
+    public let clockProvenance: DiscoveryProvenance
+    public let topologyProvenance: DiscoveryProvenance
+    public let memoryProvenance: DiscoveryProvenance
+    public let gpuProvenance: DiscoveryProvenance
+    public let systemCacheProvenance: DiscoveryProvenance
+    public let firmwareProvenance: DiscoveryProvenance
+    public let hardwareModelProvenance: DiscoveryProvenance?
+    public let osLoaderProvenance: DiscoveryProvenance?
 }
 
 public enum CacheLevel: String, Codable, Sendable, CaseIterable {
@@ -213,9 +285,24 @@ public enum BenchmarkError: Error, LocalizedError {
 
 public enum BenchmarkRunner {
     public static func systemInformation() throws -> SystemInformation {
-        var native = A128SystemInfo()
-        try check(a128_read_system_info(&native))
-        return convert(native)
+        try readExtendedSystemInformation()
+    }
+
+    public static func enrichedSystemInformation() async throws -> SystemInformation {
+        await enriched(try systemInformation())
+    }
+
+    public static func enriched(_ system: SystemInformation) async -> SystemInformation {
+        await enrich(system)
+    }
+
+    public static func enriched(_ report: BenchmarkReport) async -> BenchmarkReport {
+        let system = await enrich(report.system)
+        return BenchmarkReport(
+            system: system,
+            measurements: report.measurements,
+            throughputWorkerCount: report.throughputWorkerCount
+        )
     }
 
     public static func run(configuration: BenchmarkConfiguration = .init()) throws -> BenchmarkReport {
@@ -237,7 +324,7 @@ public enum BenchmarkRunner {
             Array(bytes.bindMemory(to: A128Measurement.self).prefix(Int(nativeReport.measurement_count)))
         }
         return BenchmarkReport(
-            system: convert(nativeReport.system),
+            system: systemInformation(from: nativeReport.system),
             measurements: nativeMeasurements.map(convertMeasurement),
             throughputWorkerCount: nativeReport.throughput_worker_count
         )
@@ -277,7 +364,7 @@ public enum BenchmarkRunner {
             context,
             &nativeReport
         ))
-        return convertReport(nativeReport)
+        return try convertReport(nativeReport)
     }
 
     private static func check(_ status: A128Status) throws {
@@ -286,7 +373,10 @@ public enum BenchmarkRunner {
         throw BenchmarkError.nativeFailure(code: status.rawValue, message: message)
     }
 
-    private static func convert(_ native: A128SystemInfo) -> SystemInformation {
+    private static func convert(
+        _ native: A128SystemInfo,
+        metadata: HardwareMetadata? = nil
+    ) -> SystemInformation {
         SystemInformation(
             cpuName: string(from: native.cpu_name),
             architecture: string(from: native.architecture),
@@ -315,7 +405,197 @@ public enum BenchmarkRunner {
             platformName: string(from: native.platform_name),
             motherboard: string(from: native.motherboard),
             chipset: string(from: native.chipset),
-            firmware: string(from: native.firmware)
+            firmware: string(from: native.firmware),
+            hardwareMetadata: metadata
+        )
+    }
+
+    private static func readExtendedSystemInformation() throws -> SystemInformation {
+        var native = A128SystemInfoV2()
+        try check(a128_read_system_info_v2(&native, MemoryLayout<A128SystemInfoV2>.size))
+        guard native.schema_version >= UInt32(A128_SYSTEM_INFO_V2_SCHEMA_VERSION),
+              native.struct_size >= UInt32(
+                MemoryLayout<A128SystemInfoV2>.offset(of: \A128SystemInfoV2.legacy)! +
+                    MemoryLayout<A128SystemInfo>.size
+              ) else {
+            throw BenchmarkError.nativeFailure(code: 4, message: "unsupported system metadata schema")
+        }
+        return convert(native.legacy, metadata: convertMetadata(native))
+    }
+
+    private static func systemInformation(from legacy: A128SystemInfo) -> SystemInformation {
+        var native = A128SystemInfoV2()
+        let metadata: HardwareMetadata?
+        if a128_read_system_info_v2(&native, MemoryLayout<A128SystemInfoV2>.size) == A128_STATUS_OK,
+           native.schema_version >= UInt32(A128_SYSTEM_INFO_V2_SCHEMA_VERSION) {
+            metadata = convertMetadata(native)
+        } else {
+            metadata = nil
+        }
+        return convert(legacy, metadata: metadata)
+    }
+
+    private static func enrich(_ system: SystemInformation) async -> SystemInformation {
+        guard let metadata = system.hardwareMetadata,
+              let profiler = await SystemProfilerSnapshot.read() else {
+            return system
+        }
+        return replacingMetadata(in: system, with: enrich(metadata, profiler: profiler))
+    }
+
+    private static func enrich(
+        _ metadata: HardwareMetadata,
+        profiler: SystemProfilerSnapshot
+    ) -> HardwareMetadata {
+        let profilerFirmware = metadata.firmwareProvenance.kind == .synthetic
+            ? nil : profiler.systemFirmware
+        let gpuProvenance = profiler.gpuName == nil ? metadata.gpuProvenance : DiscoveryProvenance(
+            kind: .reported,
+            source: "system_profiler SPDisplaysDataType",
+            detail: profiler.gpuCoreCount == nil
+                ? "Integrated GPU identity reported by macOS; enabled core count was unavailable."
+                : "Integrated GPU identity and enabled core count reported by macOS."
+        )
+        return HardwareMetadata(
+            socName: metadata.socName,
+            socIdentifier: metadata.socIdentifier,
+            processNode: metadata.processNode,
+            instructionSet: metadata.instructionSet,
+            hardwareModel: profiler.hardwareModel ?? metadata.hardwareModel,
+            boardIdentifier: metadata.boardIdentifier,
+            memoryTechnology: metadata.memoryTechnology,
+            gpuName: profiler.gpuName ?? metadata.gpuName,
+            systemFirmware: profilerFirmware ?? metadata.systemFirmware,
+            osLoaderVersion: profiler.osLoaderVersion ?? metadata.osLoaderVersion,
+            physicalCoreCount: metadata.physicalCoreCount,
+            performanceCoreCount: metadata.performanceCoreCount,
+            efficiencyCoreCount: metadata.efficiencyCoreCount,
+            performanceMaxMegahertz: metadata.performanceMaxMegahertz,
+            efficiencyMaxMegahertz: metadata.efficiencyMaxMegahertz,
+            gpuCoreCount: profiler.gpuCoreCount ?? metadata.gpuCoreCount,
+            gpuMaxMegahertz: metadata.gpuMaxMegahertz,
+            neuralEngineCoreCount: metadata.neuralEngineCoreCount,
+            memoryBandwidthGigabytesPerSecond: metadata.memoryBandwidthGigabytesPerSecond,
+            memoryDataRateMTPS: metadata.memoryDataRateMTPS,
+            performanceLevels: metadata.performanceLevels,
+            systemCacheBytes: metadata.systemCacheBytes,
+            socProvenance: metadata.socProvenance,
+            clockProvenance: metadata.clockProvenance,
+            topologyProvenance: metadata.topologyProvenance,
+            memoryProvenance: metadata.memoryProvenance,
+            gpuProvenance: gpuProvenance,
+            systemCacheProvenance: metadata.systemCacheProvenance,
+            firmwareProvenance: profilerFirmware == nil
+                ? metadata.firmwareProvenance : DiscoveryProvenance(
+                    kind: .reported,
+                    source: "system_profiler SPHardwareDataType",
+                    detail: "System firmware version reported by macOS."
+                ),
+            hardwareModelProvenance: profiler.hardwareModel == nil
+                ? metadata.hardwareModelProvenance : DiscoveryProvenance(
+                    kind: .reported,
+                    source: "system_profiler SPHardwareDataType",
+                    detail: "Hardware model reported by macOS."
+                ),
+            osLoaderProvenance: profiler.osLoaderVersion == nil
+                ? metadata.osLoaderProvenance : DiscoveryProvenance(
+                    kind: .reported,
+                    source: "system_profiler SPHardwareDataType",
+                    detail: "OS loader version reported by macOS."
+                )
+        )
+    }
+
+    fileprivate static func replacingMetadata(
+        in system: SystemInformation,
+        with metadata: HardwareMetadata?
+    ) -> SystemInformation {
+        SystemInformation(
+            cpuName: system.cpuName, architecture: system.architecture, backend: system.backend,
+            memoryBytes: system.memoryBytes, l1DataBytes: system.l1DataBytes,
+            l2Bytes: system.l2Bytes, l3Bytes: system.l3Bytes,
+            logicalCPUCount: system.logicalCPUCount,
+            cpuMicroarchitecture: system.cpuMicroarchitecture, cpuSocket: system.cpuSocket,
+            cpuFeatures: system.cpuFeatures, cpuFamily: system.cpuFamily,
+            cpuModel: system.cpuModel, cpuStepping: system.cpuStepping,
+            cpuSignature: system.cpuSignature, microcodeVersion: system.microcodeVersion,
+            cpuBaseMegahertz: system.cpuBaseMegahertz, cpuMaxMegahertz: system.cpuMaxMegahertz,
+            referenceClockMegahertz: system.referenceClockMegahertz,
+            memoryType: system.memoryType, memoryDataRate: system.memoryDataRate,
+            memoryModuleCount: system.memoryModuleCount,
+            memoryManufacturer: system.memoryManufacturer,
+            memoryPartNumber: system.memoryPartNumber, platformName: system.platformName,
+            motherboard: system.motherboard, chipset: system.chipset,
+            firmware: system.firmware, hardwareMetadata: metadata
+        )
+    }
+
+    private static func convertMetadata(_ native: A128SystemInfoV2) -> HardwareMetadata {
+        var copy = native
+        let levels = withUnsafeBytes(of: &copy.performance_levels) { bytes in
+            Array(bytes.bindMemory(to: A128PerformanceLevel.self)
+                .prefix(Int(min(copy.performance_level_count, UInt32(A128_MAX_PERFORMANCE_LEVELS)))))
+                .map { level in
+                    CPUPerformanceLevel(
+                        name: string(from: level.name),
+                        physicalCoreCount: level.physical_core_count,
+                        logicalCPUCount: level.logical_cpu_count,
+                        l1InstructionBytes: level.l1_instruction_bytes,
+                        l1DataBytes: level.l1_data_bytes,
+                        l2Bytes: level.l2_bytes
+                    )
+                }
+        }
+        let nativeGPUName = string(from: native.gpu_name).nilIfEmpty
+        let nativeFirmwareProvenance = convertProvenance(native.firmware_provenance)
+        return HardwareMetadata(
+            socName: string(from: native.soc_name),
+            socIdentifier: string(from: native.soc_identifier),
+            processNode: string(from: native.process_node),
+            instructionSet: string(from: native.instruction_set),
+            hardwareModel: string(from: native.hardware_model),
+            boardIdentifier: string(from: native.board_identifier),
+            memoryTechnology: string(from: native.memory_technology),
+            gpuName: nativeGPUName,
+            systemFirmware: string(from: native.system_firmware),
+            osLoaderVersion: string(from: native.os_loader_version),
+            physicalCoreCount: native.physical_core_count,
+            performanceCoreCount: native.performance_core_count,
+            efficiencyCoreCount: native.efficiency_core_count,
+            performanceMaxMegahertz: native.performance_max_megahertz,
+            efficiencyMaxMegahertz: native.efficiency_max_megahertz,
+            gpuCoreCount: native.gpu_core_count,
+            gpuMaxMegahertz: native.gpu_max_megahertz,
+            neuralEngineCoreCount: native.neural_engine_core_count,
+            memoryBandwidthGigabytesPerSecond: native.memory_bandwidth_gigabytes_per_second,
+            memoryDataRateMTPS: native.memory_data_rate_mtps,
+            performanceLevels: levels,
+            systemCacheBytes: native.system_cache_bytes,
+            socProvenance: convertProvenance(native.soc_provenance),
+            clockProvenance: convertProvenance(native.clock_provenance),
+            topologyProvenance: convertProvenance(native.topology_provenance),
+            memoryProvenance: convertProvenance(native.memory_provenance),
+            gpuProvenance: convertProvenance(native.gpu_provenance),
+            systemCacheProvenance: convertProvenance(native.system_cache_provenance),
+            firmwareProvenance: nativeFirmwareProvenance,
+            hardwareModelProvenance: nil,
+            osLoaderProvenance: nil
+        )
+    }
+
+    private static func convertProvenance(_ native: A128Provenance) -> DiscoveryProvenance {
+        let kind: ProvenanceKind = switch native.kind {
+        case A128_PROVENANCE_REPORTED: .reported
+        case A128_PROVENANCE_DERIVED: .derived
+        case A128_PROVENANCE_MAPPED: .mapped
+        case A128_PROVENANCE_EXPERIMENTAL: .experimental
+        case A128_PROVENANCE_SYNTHETIC: .synthetic
+        default: .unavailable
+        }
+        return DiscoveryProvenance(
+            kind: kind,
+            source: string(from: native.source),
+            detail: string(from: native.detail)
         )
     }
 
@@ -344,13 +624,13 @@ public enum BenchmarkRunner {
         )
     }
 
-    private static func convertReport(_ nativeReport: A128Report) -> BenchmarkReport {
+    private static func convertReport(_ nativeReport: A128Report) throws -> BenchmarkReport {
         var report = nativeReport
         let nativeMeasurements = withUnsafeBytes(of: &report.measurements) { bytes in
             Array(bytes.bindMemory(to: A128Measurement.self).prefix(Int(report.measurement_count)))
         }
         return BenchmarkReport(
-            system: convert(report.system),
+            system: systemInformation(from: report.system),
             measurements: nativeMeasurements.map(convertMeasurement),
             throughputWorkerCount: report.throughput_worker_count
         )
@@ -438,4 +718,130 @@ private final class ProgressBox: @unchecked Sendable {
                 ? BenchmarkRunner.convertMeasurement(event.measurement) : nil
         ))
     }
+}
+
+private struct SystemProfilerSnapshot: Sendable {
+    let hardwareModel: String?
+    let systemFirmware: String?
+    let osLoaderVersion: String?
+    let gpuName: String?
+    let gpuCoreCount: UInt32?
+
+    static func read() async -> SystemProfilerSnapshot? {
+        let operation = SystemProfilerOperation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                operation.start(continuation: continuation)
+            }
+        } onCancel: {
+            operation.cancel()
+        }
+    }
+
+    fileprivate static func load(registerRunning: (Process) -> Void) -> SystemProfilerSnapshot? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+        process.arguments = ["SPHardwareDataType", "SPDisplaysDataType", "-json"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        let terminated = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in terminated.signal() }
+        do {
+            try process.run()
+            registerRunning(process)
+            try? output.fileHandleForWriting.close()
+            let reader = ProfilerOutputReader(handle: output.fileHandleForReading)
+            reader.start()
+            if terminated.wait(timeout: .now() + 8) == .timedOut {
+                process.terminate()
+                if terminated.wait(timeout: .now() + 1) == .timedOut {
+                    Darwin.kill(process.processIdentifier, SIGKILL)
+                    terminated.wait()
+                }
+            }
+            reader.wait()
+            let data = reader.data
+            guard process.terminationStatus == 0,
+                  let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let hardware = (root["SPHardwareDataType"] as? [[String: Any]])?.first
+            let display = (root["SPDisplaysDataType"] as? [[String: Any]])?.first(where: { item in
+                let name = item["sppci_model"] as? String ?? item["_name"] as? String
+                return name?.contains("Apple") == true
+            })
+            return SystemProfilerSnapshot(
+                hardwareModel: hardware?["machine_model"] as? String,
+                systemFirmware: hardware?["boot_rom_version"] as? String,
+                osLoaderVersion: hardware?["os_loader_version"] as? String,
+                gpuName: display?["sppci_model"] as? String ?? display?["_name"] as? String,
+                gpuCoreCount: uint32(display?["sppci_cores"])
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func uint32(_ value: Any?) -> UInt32? {
+        if let number = value as? NSNumber { return number.uint32Value }
+        if let string = value as? String {
+            return UInt32(string.components(separatedBy: CharacterSet.decimalDigits.inverted).joined())
+        }
+        return nil
+    }
+}
+
+private final class SystemProfilerOperation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func start(continuation: CheckedContinuation<SystemProfilerSnapshot?, Never>) {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let result = SystemProfilerSnapshot.load { candidate in
+                lock.withLock {
+                    process = candidate
+                    if cancelled { Darwin.kill(candidate.processIdentifier, SIGKILL) }
+                }
+            }
+            lock.withLock { process = nil }
+            continuation.resume(returning: result)
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            guard let process, process.isRunning else { return }
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+    }
+}
+
+private final class ProfilerOutputReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let queue = DispatchQueue(label: "dev.durkaebanaya.aida128.system-profiler")
+    private let group = DispatchGroup()
+    private let lock = NSLock()
+    private var storage = Data()
+
+    init(handle: FileHandle) { self.handle = handle }
+
+    var data: Data { lock.withLock { storage } }
+
+    func start() {
+        group.enter()
+        queue.async { [self] in
+            let value = handle.readDataToEndOfFile()
+            lock.withLock { storage = value }
+            group.leave()
+        }
+    }
+
+    func wait() { group.wait() }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

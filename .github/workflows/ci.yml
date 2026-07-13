@@ -55,6 +55,23 @@ jobs:
       - run: swift test
       - run: swift build -c release
       - run: .build/release/aida128-bench --samples 3 --duration-ms 20 --format json --output arm-smoke.json
+      - name: Verify Apple metadata contract
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json
+          with open("arm-smoke.json", "r", encoding="utf-8") as stream:
+              report = json.load(stream)
+          system = report["system"]
+          metadata = system["hardwareMetadata"]
+          assert system["architecture"] == "arm64"
+          assert metadata["physicalCoreCount"] > 0
+          assert metadata["hardwareModel"]
+          assert metadata["systemFirmware"]
+          assert metadata["osLoaderVersion"]
+          assert metadata["performanceLevels"]
+          assert metadata["topologyProvenance"]["kind"] == "reported"
+          assert metadata["topologyProvenance"]["source"] == "sysctl hw.perflevel*"
+          PY
       - uses: actions/upload-artifact@v7
         with:
           name: arm-smoke-report
@@ -69,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: chmod +x scripts/build-universal.sh
-      - run: VERSION=0.1.0-rc.1 scripts/build-universal.sh
+      - run: VERSION=0.1.0-rc.2 scripts/build-universal.sh
       - uses: actions/upload-artifact@v7
         with:
           name: Aida128-universal2

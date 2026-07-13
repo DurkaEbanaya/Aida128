@@ -26,7 +26,7 @@ let package = Package(
             dependencies: ["BenchmarkKit", "BenchmarkCommandLine"]
         ),
         .executableTarget(name: "Aida128App", dependencies: ["BenchmarkKit"]),
-        .testTarget(name: "BenchmarkKitTests", dependencies: ["BenchmarkKit"]),
+        .testTarget(name: "BenchmarkKitTests", dependencies: ["BenchmarkKit", "BenchmarkCore"]),
         .testTarget(name: "BenchmarkCommandLineTests", dependencies: ["BenchmarkCommandLine"]),
     ],
     cxxLanguageStandard: .cxx20
