@@ -4,7 +4,17 @@ A native macOS cache and memory benchmark inspired by the compact workflow of AI
 
 ![macOS](https://img.shields.io/badge/macOS-13%2B-black)
 ![architectures](https://img.shields.io/badge/architectures-x86__64%20%7C%20arm64-blue)
+![release](https://img.shields.io/github/v/release/DurkaEbanaya/Aida128)
 ![license](https://img.shields.io/badge/license-MIT-green)
+
+## Download
+
+Latest stable release: **[Aida128 1.0.0](https://github.com/DurkaEbanaya/Aida128/releases/tag/v1.0.0)**
+
+- [Aida128-1.0.0-universal2.zip](https://github.com/DurkaEbanaya/Aida128/releases/download/v1.0.0/Aida128-1.0.0-universal2.zip)
+- [SHA-256 checksums](https://github.com/DurkaEbanaya/Aida128/releases/download/v1.0.0/Aida128-1.0.0-SHA256SUMS.txt)
+
+The package contains a Universal 2 SwiftUI app and CLI with `x86_64` and `arm64` slices. It is ad-hoc signed and **not notarized**; on first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.
 
 ## Features
 
@@ -23,10 +33,20 @@ A native macOS cache and memory benchmark inspired by the compact workflow of AI
 
 | Platform | Backend | Status |
 | --- | --- | --- |
-| Intel macOS x86_64 | AVX2 | Runtime, sanitizer, GUI, CLI, and Universal 2 packaging tested on Intel Core i5-14600KF |
-| Apple Silicon arm64 | NEON/ASIMD | Native tests and CLI smoke verified on a GitHub-hosted Apple M1 VM; local release builds include an arm64 slice, but physical-device GUI validation remains pending |
+| Intel macOS x86_64 | AVX2 | Runtime, sanitizer, GUI, CLI, release build, and Universal 2 packaging tested on Intel Core i5-14600KF |
+| Apple Silicon arm64 | NEON/ASIMD | Native tests and CLI smoke verified on a GitHub-hosted Apple M1 VM; Universal 2 package includes a verified arm64 slice, but physical-device GUI validation remains pending |
 
-The 1.0.0 package is ad-hoc signed and not notarized. GitHub Actions has executed the native tests and benchmark CLI on arm64, but a hosted VM does not replace GUI validation on a physical Apple Silicon Mac.
+GitHub Actions passed for both `main` and `v1.0.0` after publication. Hosted Apple Silicon CI does not replace GUI validation on a physical Apple Silicon Mac.
+
+## Use the packaged CLI
+
+After extracting the release zip:
+
+```bash
+./aida128-bench --help
+./aida128-bench --samples 5 --duration-ms 200
+./aida128-bench --format json --output result.json
+```
 
 ## Run from source
 
@@ -47,6 +67,8 @@ swift run -c release aida128-bench --format json --output result.json
 ```
 
 ## Build Universal 2 release package
+
+Use this only if you want to rebuild the package locally instead of downloading the release artifact.
 
 ```bash
 chmod +x scripts/build-universal.sh
