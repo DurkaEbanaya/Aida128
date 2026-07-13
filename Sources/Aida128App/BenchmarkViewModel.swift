@@ -27,9 +27,22 @@ final class BenchmarkViewModel: ObservableObject {
         return order.compactMap { measurements[$0] }
     }
 
+    func isAvailable(_ level: CacheLevel) -> Bool {
+        systemInformation?.isAvailable(level) == true
+    }
+
     func runBenchmark(selection: BenchmarkSelection = .all) {
         guard !isRunning else { return }
-        clear(selection: selection)
+        guard let discoveredSystem = systemInformation else { return }
+        let effectiveSelection = BenchmarkSelection(
+            levels: selection.levels.intersection(discoveredSystem.availableLevels),
+            metrics: selection.metrics
+        )
+        guard !effectiveSelection.levels.isEmpty else {
+            errorMessage = "The selected cache level is unavailable on this system."
+            return
+        }
+        clear(selection: effectiveSelection)
         isRunning = true
         errorMessage = nil
         progress = nil
@@ -40,7 +53,7 @@ final class BenchmarkViewModel: ObservableObject {
             let run = Task.detached(priority: .userInitiated) {
                 defer { continuation.finish() }
                 return try BenchmarkRunner.runSelected(
-                    selection: selection,
+                    selection: effectiveSelection,
                     totalDuration: duration
                 ) { update in
                     continuation.yield(update)

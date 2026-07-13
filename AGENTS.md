@@ -19,7 +19,7 @@ Tech stack: Swift 6 / SwiftUI / AppKit, C++20, Swift Package Manager, IOKit, Mac
 - Swift passes benchmark intent only. Cache sizes, ISA, topology, and iteration calibration belong to `BenchmarkCore`.
 - GUI progress must come from native callbacks after real work; never synthesize progress or parse LLM/text output.
 - Throughput is aggregate; latency is a single dependent chain. Do not mix their semantics silently.
-- Full V2 runs contain exactly 16 visible stages in `Memory → L1 → L2 → L3` and `Read → Write → Copy → Latency` order.
+- Full V2 runs execute four metrics for every discovered level in `Memory → L1 → L2 → L3` order. L3 is unavailable when macOS does not expose an LLC capacity; it is never inferred.
 - Native runs are process-wide serialized; overlapping benchmarks are invalid.
 - Preserve old `a128_run_benchmark` compatibility when evolving the versioned C ABI.
 - ARM cross-build is not runtime proof. Stable release requires real Apple Silicon CI/device validation.

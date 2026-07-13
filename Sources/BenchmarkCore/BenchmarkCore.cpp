@@ -810,14 +810,49 @@ size_t aligned_working_set(uint64_t desired) {
     return static_cast<size_t>((bounded / kKernelQuantum) * kKernelQuantum);
 }
 
+constexpr uint64_t saturating_multiply(uint64_t value, uint64_t factor) {
+    return value > std::numeric_limits<uint64_t>::max() / factor
+        ? std::numeric_limits<uint64_t>::max()
+        : value * factor;
+}
+
+constexpr bool is_usable_l3_capacity(uint64_t l2_bytes, uint64_t l3_bytes) {
+    return l3_bytes > 0 && l2_bytes <= l3_bytes / 2;
+}
+
+bool has_usable_l3(const A128SystemInfo &system) {
+    return is_usable_l3_capacity(system.l2_bytes, system.l3_bytes);
+}
+
+static_assert(saturating_multiply(7, 4) == 28);
+static_assert(saturating_multiply(std::numeric_limits<uint64_t>::max(), 2) ==
+              std::numeric_limits<uint64_t>::max());
+static_assert(!is_usable_l3_capacity(1, 0));
+static_assert(!is_usable_l3_capacity(8, 15));
+static_assert(is_usable_l3_capacity(8, 16));
+
 std::array<size_t, 4> working_sets(const A128SystemInfo &system) {
     const uint64_t l1 = aligned_working_set(system.l1_data_bytes / 2);
-    const uint64_t l2 = aligned_working_set(std::max(system.l1_data_bytes * 2, system.l2_bytes / 2));
-    const uint64_t l3 = aligned_working_set(system.l2_bytes * 2);
-    const uint64_t memory_floor = std::max<uint64_t>(system.l3_bytes * 4, 128ULL * 1024 * 1024);
+    const uint64_t l2 = aligned_working_set(std::max(
+        saturating_multiply(system.l1_data_bytes, 2), system.l2_bytes / 2
+    ));
+    const uint64_t l3 = !has_usable_l3(system)
+        ? 0
+        : aligned_working_set(std::max(
+            saturating_multiply(system.l2_bytes, 2), system.l3_bytes / 2
+        ));
+    const uint64_t memory_floor = std::max<uint64_t>(
+        saturating_multiply(system.l3_bytes, 4), 128ULL * 1024 * 1024
+    );
     const uint64_t memory_cap = std::max<uint64_t>(128ULL * 1024 * 1024, system.memory_bytes / 8);
     const uint64_t memory = aligned_working_set(std::min<uint64_t>(memory_floor, memory_cap));
     return {static_cast<size_t>(l1), static_cast<size_t>(l2), static_cast<size_t>(l3), static_cast<size_t>(memory)};
+}
+
+A128LevelMask available_level_mask(const A128SystemInfo &system) {
+    A128LevelMask mask = A128_LEVEL_MASK_L1 | A128_LEVEL_MASK_L2 | A128_LEVEL_MASK_MEMORY;
+    if (has_usable_l3(system)) mask |= A128_LEVEL_MASK_L3;
+    return mask;
 }
 
 size_t bytes_per_worker(A128Level level, size_t logical_working_set, uint32_t worker_count) {
@@ -973,6 +1008,7 @@ extern "C" A128Status a128_run_benchmark(
 
     uint32_t measurement_index = 0;
     for (size_t index = 0; index < sizes.size(); ++index) {
+        if (sizes[index] == 0) continue;
         const A128Level level = static_cast<A128Level>(index);
         const size_t latency_size = sizes[index];
         AlignedBuffer latency_buffer(latency_size);
@@ -1075,7 +1111,10 @@ extern "C" A128Status a128_run_benchmark_v2(
         ? std::max<uint32_t>(output->system.logical_cpu_count, 1)
         : configuration->throughput_worker_count;
     output->throughput_worker_count = worker_count;
-    const uint32_t total_stages = popcount32(configuration->level_mask) *
+    const A128LevelMask effective_level_mask = configuration->level_mask &
+                                               available_level_mask(output->system);
+    if (effective_level_mask == 0) return A128_STATUS_LEVEL_UNAVAILABLE;
+    const uint32_t total_stages = popcount32(effective_level_mask) *
                                   popcount32(configuration->metric_mask);
     const uint64_t per_sample_nanoseconds = std::max<uint64_t>(
         10'000'000ULL,
@@ -1097,7 +1136,7 @@ extern "C" A128Status a128_run_benchmark_v2(
     uint32_t completed_stages = 0;
 
     for (A128Level level : level_order) {
-        if ((configuration->level_mask & (1u << level)) == 0) continue;
+        if ((effective_level_mask & (1u << level)) == 0) continue;
         const size_t logical_size = sizes[static_cast<size_t>(level)];
         A128Measurement measurement{};
         measurement.level = level;
@@ -1191,6 +1230,7 @@ extern "C" const char *a128_status_message(A128Status status) noexcept {
         case A128_STATUS_ALLOCATION_FAILED: return "aligned memory allocation failed";
         case A128_STATUS_SYSTEM_ERROR: return "required system information is unavailable";
         case A128_STATUS_BUSY: return "another benchmark run is already active";
+        case A128_STATUS_LEVEL_UNAVAILABLE: return "none of the requested cache levels are available";
     }
     return "unknown benchmark status";
 }

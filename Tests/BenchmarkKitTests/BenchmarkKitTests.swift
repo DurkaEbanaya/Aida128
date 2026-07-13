@@ -84,6 +84,7 @@ struct NativeBenchmarkTests {
 }
 
 @Test func fullSelectionUsesVisibleLevelOrderAndMonotonicProgress() throws {
+    let information = try BenchmarkRunner.systemInformation()
     let events = ProgressRecorder()
     _ = try BenchmarkRunner.runSelected(
         selection: .all,
@@ -92,11 +93,14 @@ struct NativeBenchmarkTests {
         progress: events.record
     )
     let completed = events.values.filter { $0.phase == .stageCompleted }
-    #expect(completed.count == 16)
+    let expectedLevels = [CacheLevel.memory, .l1, .l2, .l3].filter(information.isAvailable)
+    #expect(completed.count == expectedLevels.count * 4)
     #expect(Array(completed.prefix(4)).allSatisfy { $0.level == .memory })
     #expect(Array(completed[4..<8]).allSatisfy { $0.level == .l1 })
     #expect(Array(completed[8..<12]).allSatisfy { $0.level == .l2 })
-    #expect(Array(completed[12..<16]).allSatisfy { $0.level == .l3 })
+    if information.isAvailable(.l3) {
+        #expect(Array(completed[12..<16]).allSatisfy { $0.level == .l3 })
+    }
     let fractions = events.values.map(\.fractionCompleted)
     #expect(zip(fractions, fractions.dropFirst()).allSatisfy(<=))
     #expect(events.values.last?.phase == .runCompleted)
@@ -124,6 +128,22 @@ struct NativeBenchmarkTests {
         }
     }
     #expect(rejection.code == 5)
+}
+
+@Test func undiscoveredL3IsRejectedAsUnavailable() throws {
+    let information = try BenchmarkRunner.systemInformation()
+    guard !information.isAvailable(.l3) else { return }
+    do {
+        _ = try BenchmarkRunner.runSelected(
+            selection: .row(.l3),
+            totalDuration: .milliseconds(120),
+            sampleCount: 3,
+            progress: { _ in }
+        )
+        Issue.record("An undiscovered L3 level must not produce a successful run")
+    } catch let BenchmarkError.nativeFailure(code, _) {
+        #expect(code == 6)
+    }
 }
 
 private final class ProgressRecorder: @unchecked Sendable {
@@ -174,10 +194,11 @@ private final class NativeFailureRecorder: @unchecked Sendable {
         configuration: .init(sampleCount: 3, minimumSampleDuration: .milliseconds(20))
     )
     #expect(report.throughputWorkerCount == report.system.logicalCPUCount)
-    #expect(report.measurements.count == 8)
-    #expect(report.measurements.filter { $0.scope == .singleWorker }.count == 4)
-    #expect(report.measurements.filter { $0.scope == .aggregate }.count == 4)
-    #expect(report.aidaMeasurements.count == 4)
+    let levelCount = report.system.availableLevels.count
+    #expect(report.measurements.count == levelCount * 2)
+    #expect(report.measurements.filter { $0.scope == .singleWorker }.count == levelCount)
+    #expect(report.measurements.filter { $0.scope == .aggregate }.count == levelCount)
+    #expect(report.aidaMeasurements.count == levelCount)
     for measurement in report.measurements {
         #expect(measurement.readGigabytesPerSecond?.isFinite == true)
         #expect(measurement.readGigabytesPerSecond ?? 0 > 0)
@@ -195,7 +216,7 @@ private final class NativeFailureRecorder: @unchecked Sendable {
     let encoded = try JSONEncoder().encode(report)
     let decoded = try JSONDecoder().decode(BenchmarkReport.self, from: encoded)
     #expect(decoded.measurements.count == report.measurements.count)
-    #expect(decoded.measurements.filter { $0.latencyNanoseconds == nil }.count == 4)
+    #expect(decoded.measurements.filter { $0.latencyNanoseconds == nil }.count == levelCount)
 }
 
 }

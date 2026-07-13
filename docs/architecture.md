@@ -26,7 +26,7 @@ The V2 callback is synchronous on the native orchestration thread. Swift retains
 
 - Throughput is aggregate across a native worker team.
 - Latency is one dependent pointer chain.
-- A full UI run has sixteen visible stages and no hidden throughput passes.
+- A full UI run has four visible stages per discovered level and no hidden throughput passes. Requested levels are intersected with native availability; an entirely unavailable selection returns a typed error.
 - Native benchmark runs are process-wide serialized because overlapping runs invalidate both measurements. A concurrent or callback-reentrant run is rejected immediately with `A128_STATUS_BUSY`; callers never wait behind another measurement.
 - x86_64 uses AVX2; arm64 uses NEON/ASIMD.
 - Architecture-specific knowledge stays behind the C++ adapters.

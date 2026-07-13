@@ -169,7 +169,7 @@ struct BenchmarkView: View {
 
     private func benchmarkRowButton(_ level: CacheLevel) -> some View {
         RevealButton(
-            enabled: !model.isRunning,
+            enabled: !model.isRunning && model.isAvailable(level),
             selected: model.activeLevel == level && model.activeMetric == nil,
             action: { model.runRow(level) }
         ) {
@@ -186,7 +186,7 @@ struct BenchmarkView: View {
 
     private func benchmarkCell(level: CacheLevel, metric: BenchmarkMetric) -> some View {
         RevealButton(
-            enabled: !model.isRunning,
+            enabled: !model.isRunning && model.isAvailable(level),
             selected: model.activeLevel == level && model.activeMetric == metric,
             action: { model.runCell(level: level, metric: metric) }
         ) {
@@ -198,6 +198,7 @@ struct BenchmarkView: View {
     }
 
     private func resultText(level: CacheLevel, metric: BenchmarkMetric) -> Text {
+        guard model.isAvailable(level) else { return Text("N/A") }
         guard let measurement = model.measurements[level] else { return Text("") }
         let value: Double? = switch metric {
         case .read: measurement.readGigabytesPerSecond

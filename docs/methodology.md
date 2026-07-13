@@ -10,7 +10,7 @@ The native core owns cache discovery and working-set planning. Callers never pro
 
 - L1: half the discovered L1D capacity.
 - L2: half L2, and always at least twice L1D.
-- L3: half L3, and always at least twice L2.
+- L3: half the discovered LLC, and always at least twice L2. If macOS reports no LLC capacity, or the reported capacity cannot contain a working set larger than L2, L3 is unavailable and is not measured or inferred.
 - Memory: at least 128 MiB and four times L3, capped at one eighth of physical memory.
 
 Every working set is aligned to a 64-byte cache line. Allocation and page prefaulting happen before timed regions.
@@ -28,17 +28,17 @@ The architecture-neutral native contract selects AVX2 on x86_64 and NEON/ASIMD o
 
 ## Parallelism
 
-The raw report contains two explicitly typed scopes. Single-worker measurements characterize all four hierarchy levels and include latency. Aggregate measurements provide throughput. The AIDA-like presentation combines aggregate Read/Write/Copy with single dependent-chain latency into one row per level. Workers persist across calibration and all measured samples, run at user-interactive QoS, and process private aligned buffers.
+The raw report contains two explicitly typed scopes. Single-worker measurements characterize every discovered hierarchy level and include latency. Aggregate measurements provide throughput. The AIDA-like presentation combines aggregate Read/Write/Copy with single dependent-chain latency into one row per available level. Workers persist across calibration and all measured samples, run at user-interactive QoS, and process private aligned buffers.
 
 Native benchmark runs are serialized process-wide. Overlapping runs would compete for the same CPU caches and memory controllers and therefore cannot both produce valid machine measurements; callers are not required to coordinate this themselves.
 
 ## Selective runs and progress
 
-The V2 run contract accepts explicit level and metric masks. A full GUI run consists of sixteen visible stages in `Memory → L1 → L2 → L3` order and `Read → Write → Copy → Latency` order within each level. Selecting a row executes only its four stages; selecting a cell executes only that stage. No hidden single-worker throughput pass is executed: throughput is aggregate and latency is a single dependent chain.
+The V2 run contract accepts requested level and metric masks. The native planner intersects requested levels with discovered availability, then executes `Memory → L1 → L2 → L3` and `Read → Write → Copy → Latency` within each available level. A full run therefore has sixteen stages when L3 is discovered and twelve when it is unavailable. Selecting an unavailable level returns a typed error. No hidden single-worker throughput pass is executed: throughput is aggregate and latency is a single dependent chain.
 
 The user-selected duration is a total run budget divided across selected stages and samples. Each sample retains a physical minimum of 10 ms, so calibration, allocation, prefaulting, scheduling, and this lower bound can make wall-clock duration slightly longer than the selected budget. Native progress callbacks are emitted synchronously by the orchestration thread after real calibration/sample/stage events; the GUI does not synthesize intermediate results.
 
-Aggregate L3 uses a private verified L3-sized working set per worker and limits the worker count so the combined footprint does not exceed discovered LLC capacity. This avoids partitioning each worker below private L2 capacity while also avoiding an aggregate footprint larger than LLC.
+Aggregate L3 exists only with a discovered LLC capacity. It uses a private verified L3-sized working set per worker and limits the worker count so the combined footprint does not exceed that capacity. This avoids partitioning each worker below private L2 capacity while also avoiding an aggregate footprint larger than LLC.
 
 Latency remains single-threaded because aggregating independent pointer chains is not the latency of one dependent access. macOS does not expose a supported hard-affinity API, so the benchmark does not claim that latency ran on a specific P-core or E-core.
 

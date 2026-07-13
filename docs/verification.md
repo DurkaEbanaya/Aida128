@@ -36,6 +36,10 @@ Command: `sysctl hw.cacheconfig hw.cachesize hw.l1dcachesize hw.l2cachesize hw.l
 
 The host CPU is heterogeneous. Public macOS APIs do not provide hard binding to a selected P-core. The report therefore exposes cross-sample spread. The AIDA-like headline is the best observed throughput (and lowest observed latency), not a claim that execution occurred on a particular core type.
 
+## Apple Silicon cache discovery
+
+Verified on GitHub's Apple M1 virtual runner in CI run `29249845148`. Raw `sysctl` output reported 128 KiB L1D and 12 MiB L2 through both aggregate and `hw.perflevel0` keys, while `hw.cacheconfig`, `hw.cachesize`, and `hw.l3cachesize` reported no L3/LLC capacity. The planner therefore treats L3 as unavailable on that host instead of inferring a size from L2.
+
 ## Extended platform information
 
 - Raw CPUID signature is `0x000B0671`: family 6, model `0xB7`, stepping 1. The corresponding verified platform is Raptor Lake-S / LGA1700.

@@ -46,6 +46,14 @@ public struct SystemInformation: Codable, Sendable {
     public let motherboard: String
     public let chipset: String
     public let firmware: String
+
+    public func isAvailable(_ level: CacheLevel) -> Bool {
+        level != .l3 || (l3Bytes > 0 && l2Bytes <= l3Bytes / 2)
+    }
+
+    public var availableLevels: Set<CacheLevel> {
+        Set(CacheLevel.allCases.filter(isAvailable))
+    }
 }
 
 public enum CacheLevel: String, Codable, Sendable, CaseIterable {

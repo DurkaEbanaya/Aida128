@@ -72,3 +72,12 @@ func invalidGrammarIsRejected(_ arguments: [String]) {
     #expect(!rendered.contains("Single worker hierarchy"))
     #expect(!rendered.contains("Aggregate throughput\n"))
 }
+
+@Test func textRendererMarksUndiscoveredL3Unavailable() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    guard !system.isAvailable(.l3) else { return }
+    let report = BenchmarkReport(system: system, measurements: [], throughputWorkerCount: 1)
+    let rendered = String(decoding: try ReportRenderer.render(report, format: .text), as: UTF8.self)
+    #expect(rendered.contains("L3 Cache"))
+    #expect(rendered.contains("N/A"))
+}

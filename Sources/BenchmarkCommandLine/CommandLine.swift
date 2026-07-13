@@ -175,7 +175,12 @@ public enum ReportRenderer {
         ]
         let order: [CacheLevel] = [.memory, .l1, .l2, .l3]
         for level in order {
-            guard let value = report.aidaMeasurements.first(where: { $0.level == level }) else { continue }
+            guard let value = report.aidaMeasurements.first(where: { $0.level == level }) else {
+                if !report.system.isAvailable(level) {
+                    lines.append("\(column(level.rawValue, width: 12, rightAligned: false)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("N/A", width: 12)) \(column("—", width: 9))")
+                }
+                continue
+            }
             let read = metric(value.readGigabytesPerSecond, unit: "GB/s")
             let write = metric(value.writeGigabytesPerSecond, unit: "GB/s")
             let copy = metric(value.copyGigabytesPerSecond, unit: "GB/s")
