@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: swift build --package-path IntegrationTests/PackageConsumer
+      - run: swift build -c release
+
+  test-arm:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: swift build -c release
+      - run: .build/release/aida128-bench --samples 3 --duration-ms 20 --format json --output arm-smoke.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm-smoke-report
+          path: arm-smoke.json
+
+  universal-package:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: chmod +x scripts/build-universal.sh
+      - run: VERSION=0.1.0-rc.1 scripts/build-universal.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aida128-universal2
+          path: dist/*
