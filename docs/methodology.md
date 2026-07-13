@@ -10,17 +10,17 @@ The native core owns cache discovery and working-set planning. Callers never pro
 
 - L1: half the discovered L1D capacity.
 - L2: half L2, and always at least twice L1D.
-- Last-level cache: half the verified target capacity and at least twice L2. On Intel this is CPU L3. On Apple Silicon the corresponding presentation is the SoC System Level Cache (SLC), shared with other agents. Experimental catalog estimates are display-only and do not enable benchmark planning; an SLC run requires a runtime-verified exact capacity.
+- Last-level cache: the full target capacity, divided across the worker team for aggregate throughput. On Intel this is CPU L3. On Apple Silicon the corresponding presentation is the SoC System Level Cache (SLC), shared with other agents. Default verified mode requires a runtime-reported exact capacity. Experimental catalog estimates enter benchmark planning only after explicit user opt-in and remain provenance-marked as estimates.
 - Memory: at least 128 MiB and four times L3, capped at one eighth of physical memory.
 
 Every working set is aligned to a 64-byte cache line. Allocation and page prefaulting happen before timed regions.
 
 ## Operations
 
-- Read: eight independent aligned SIMD load/accumulator streams, avoiding a synthetic dependency bottleneck.
+- Read: aligned SIMD load sweeps. The x86_64 L1 kernel uses a volatile AVX2 load sweep to avoid charging artificial ALU accumulation against L1 bandwidth; deeper x86_64 levels and arm64 use independent load/accumulator streams to keep work observable without a synthetic dependency bottleneck.
 - Write: aligned cached SIMD stores.
 - Copy: eight aligned SIMD load/store streams; `memcpy` is not used. Memory write and copy use non-temporal stores on x86_64 to avoid measuring write-allocate RFO as useful payload. Arm64 uses cached NEON stores because AArch64 has no equivalent general-purpose non-temporal store contract.
-- Latency: one dependent access at a time through a deterministic, shuffled, single-cycle chain with one node per cache line.
+- Latency: one dependent access at a time through a deterministic chain with one node per cache line. Memory latency uses a full shuffled chain across the memory working set. Cache latency shuffles within 4 KiB pages and links pages deterministically so the cache row measures cache-hit behavior instead of dominating the result with TLB/page-walk misses.
 
 Every completed throughput sweep crosses a compiler memory barrier. This makes each sweep observable and prevents dead-store elimination, repeated-copy elimination, and algebraic removal of repeated reads. The barrier emits no measured memory operation of its own.
 
@@ -34,11 +34,11 @@ Native benchmark runs are serialized process-wide. Overlapping runs would compet
 
 ## Selective runs and progress
 
-The V2 run contract accepts requested level and metric masks. The native planner intersects requested levels with discovered availability, then executes `Memory → L1 → L2 → L3` and `Read → Write → Copy → Latency` within each available level. A full run therefore has sixteen stages when L3 is discovered and twelve when it is unavailable. Selecting an unavailable level returns a typed error. No hidden single-worker throughput pass is executed: throughput is aggregate and latency is a single dependent chain.
+The V2 run contract accepts requested level and metric masks plus explicit option bits. The native planner intersects requested levels with discovered availability, then executes `Memory → L1 → L2 → L3` and `Read → Write → Copy → Latency` within each available level. A full run therefore has sixteen stages when L3/SLC is available and twelve when it is unavailable. The experimental SLC option can add an Apple Silicon catalog SLC estimate to the effective planning snapshot for that run only; it does not rewrite reported runtime cache discovery. Selecting an unavailable level returns a typed error. No hidden single-worker throughput pass is executed: throughput is aggregate and latency is a single dependent chain.
 
 The user-selected duration is a total run budget divided across selected stages and samples. Each sample retains a physical minimum of 10 ms, so calibration, allocation, prefaulting, scheduling, and this lower bound can make wall-clock duration slightly longer than the selected budget. Native progress callbacks are emitted synchronously by the orchestration thread after real calibration/sample/stage events; the GUI does not synthesize intermediate results.
 
-Aggregate last-level-cache testing exists only with a verified capacity. It limits the worker count so the combined footprint does not exceed that capacity. On Apple Silicon the result is explicitly CPU-observed SLC performance, not total SLC throughput available to the GPU or Neural Engine.
+Aggregate last-level-cache testing divides the verified or explicitly opted-in experimental capacity across the selected worker team. On Apple Silicon the result is explicitly CPU-observed SLC performance, not total SLC throughput available to the GPU or Neural Engine.
 
 Latency remains single-threaded because aggregating independent pointer chains is not the latency of one dependent access. macOS does not expose a supported hard-affinity API, so the benchmark does not claim that latency ran on a specific P-core or E-core.
 

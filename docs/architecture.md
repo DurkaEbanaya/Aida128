@@ -18,7 +18,7 @@ CLI parser and renderer ───┘
 
 ## Contract boundaries
 
-Swift callers pass only intent: selected levels/metrics, total duration, sample count, and optional worker count. They do not pass cache sizes, ISA identifiers, kernel iteration counts, or downstream topology knowledge. The native core discovers those facts and returns typed results.
+Swift callers pass only intent: selected levels/metrics, total duration, sample count, optional worker count, and explicit run option bits. They do not pass cache sizes, ISA identifiers, kernel iteration counts, or downstream topology knowledge. The native core discovers those facts and returns typed results. The Apple Silicon experimental SLC option is an opt-in intent bit only: the core resolves whether a catalog SLC estimate exists and whether it can enter the effective planning snapshot for that run.
 
 The original unversioned `A128SystemInfo` and `A128Report` remain byte-for-byte stable. Extended topology, SoC, GPU, firmware, system-cache, and provenance data use the separately sized `A128SystemInfoV2` contract. Callers provide writable capacity; the returned `struct_size` is the byte count actually written, so each tail field is consumed only when its complete range is present. Swift merges that static metadata into reports without changing the legacy benchmark ABI.
 
@@ -30,7 +30,7 @@ The V2 callback is synchronous on the native orchestration thread. Swift retains
 
 - Throughput is aggregate across a native worker team.
 - Latency is one dependent pointer chain.
-- A full UI run has four visible stages per discovered level and no hidden throughput passes. Requested levels are intersected with native availability; an entirely unavailable selection returns a typed error.
+- A full UI run has four visible stages per discovered level and no hidden throughput passes. Requested levels are intersected with native availability; an entirely unavailable selection returns a typed error. With explicit experimental SLC opt-in, an Apple Silicon catalog SLC estimate may become runnable while remaining distinct from verified runtime availability.
 - Native benchmark runs are process-wide serialized because overlapping runs invalidate both measurements. A concurrent or callback-reentrant run is rejected immediately with `A128_STATUS_BUSY`; callers never wait behind another measurement.
 - x86_64 uses AVX2; arm64 uses NEON/ASIMD. The legacy L3 level is presented as `System Cache (SLC)` on Apple Silicon, while its numeric ABI identity remains unchanged.
 - Architecture-specific knowledge stays behind the C++ adapters.

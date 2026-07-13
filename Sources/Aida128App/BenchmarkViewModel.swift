@@ -13,6 +13,7 @@ final class BenchmarkViewModel: ObservableObject {
     @Published private(set) var activeLevel: CacheLevel?
     @Published private(set) var activeMetric: BenchmarkMetric?
     @Published var totalDurationSeconds = 30
+    @Published var experimentalSystemCacheEnabled = false
     private var enrichmentTask: Task<Void, Never>?
     private var benchmarkTask: Task<Void, Never>?
 
@@ -44,11 +45,22 @@ final class BenchmarkViewModel: ObservableObject {
         systemInformation?.isAvailable(level) == true
     }
 
+    func isRunnable(_ level: CacheLevel) -> Bool {
+        systemInformation?.isRunnable(level, options: runOptions) == true
+    }
+
+    var canEnableExperimentalSystemCache: Bool {
+        guard let systemInformation else { return false }
+        return !systemInformation.isAvailable(.l3) &&
+            systemInformation.isRunnable(.l3, options: [.experimentalSystemCache])
+    }
+
     func runBenchmark(selection: BenchmarkSelection = .all) {
         guard !isRunning else { return }
         guard let discoveredSystem = systemInformation else { return }
+        let runOptions = runOptions
         let effectiveSelection = BenchmarkSelection(
-            levels: selection.levels.intersection(discoveredSystem.availableLevels),
+            levels: selection.levels.intersection(discoveredSystem.availableLevels(options: runOptions)),
             metrics: selection.metrics
         )
         guard !effectiveSelection.levels.isEmpty else {
@@ -67,7 +79,8 @@ final class BenchmarkViewModel: ObservableObject {
                 defer { continuation.finish() }
                 return try BenchmarkRunner.runSelected(
                     selection: effectiveSelection,
-                    totalDuration: duration
+                    totalDuration: duration,
+                    runOptions: runOptions
                 ) { update in
                     continuation.yield(update)
                 }
@@ -174,8 +187,13 @@ final class BenchmarkViewModel: ObservableObject {
     private func applyHardwareMetadata(_ metadata: HardwareMetadata?) {
         guard let current = systemInformation else { return }
         systemInformation = current.replacingHardwareMetadata(metadata)
+        if !canEnableExperimentalSystemCache { experimentalSystemCacheEnabled = false }
         if let workerCount = report?.throughputWorkerCount {
             rebuildReport(workerCount: workerCount)
         }
+    }
+
+    private var runOptions: BenchmarkRunOptions {
+        experimentalSystemCacheEnabled ? [.experimentalSystemCache] : []
     }
 }

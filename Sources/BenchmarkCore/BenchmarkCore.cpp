@@ -203,6 +203,36 @@ const AppleSoCSpecification *apple_soc_specification(const std::string &cpu_name
     return cpu_name == kAppleM5Specification.name ? &kAppleM5Specification : nullptr;
 }
 
+bool is_arm64_system(const A128SystemInfo &system) {
+    return std::strcmp(system.architecture, "arm64") == 0;
+}
+
+uint64_t experimental_system_cache_bytes(const A128SystemInfo &system) {
+    if (!is_arm64_system(system)) return 0;
+    const AppleSoCSpecification *specification = apple_soc_specification(system.cpu_name);
+    return specification ? specification->system_cache_bytes : 0;
+}
+
+enum class PerformanceLevelClass {
+    unknown,
+    super,
+    performance,
+    efficiency
+};
+
+PerformanceLevelClass classify_performance_level(const char *name) {
+    if (std::strcmp(name, "Super") == 0 || std::strcmp(name, "S") == 0) {
+        return PerformanceLevelClass::super;
+    }
+    if (std::strcmp(name, "Performance") == 0 || std::strcmp(name, "P") == 0) {
+        return PerformanceLevelClass::performance;
+    }
+    if (std::strcmp(name, "Efficiency") == 0 || std::strcmp(name, "E") == 0) {
+        return PerformanceLevelClass::efficiency;
+    }
+    return PerformanceLevelClass::unknown;
+}
+
 void store_provenance(
     A128Provenance &output,
     A128ProvenanceKind kind,
@@ -378,7 +408,7 @@ void prefault(uint8_t *data, size_t size) {
 #if defined(__x86_64__)
 
 __attribute__((target("avx2"), noinline))
-uint64_t read_avx2(const uint8_t *data, size_t size, uint64_t iterations) {
+uint64_t read_accumulating_avx2(const uint8_t *data, size_t size, uint64_t iterations) {
     __m256i a0 = _mm256_setzero_si256();
     __m256i a1 = _mm256_setzero_si256();
     __m256i a2 = _mm256_setzero_si256();
@@ -409,6 +439,51 @@ uint64_t read_avx2(const uint8_t *data, size_t size, uint64_t iterations) {
     alignas(32) uint64_t lanes[4];
     _mm256_store_si256(reinterpret_cast<__m256i *>(lanes), accumulator);
     return lanes[0] ^ lanes[1] ^ lanes[2] ^ lanes[3];
+}
+
+__attribute__((target("avx2"), noinline))
+uint64_t read_sweep_avx2(const uint8_t *data, size_t size, uint64_t iterations) {
+    for (uint64_t iteration = 0; iteration < iterations; ++iteration) {
+        size_t offset = 0;
+        for (; offset + 512 <= size; offset += 512) {
+            __asm__ volatile(
+                "vmovdqa   0(%0), %%ymm0\n\t"
+                "vmovdqa  32(%0), %%ymm1\n\t"
+                "vmovdqa  64(%0), %%ymm2\n\t"
+                "vmovdqa  96(%0), %%ymm3\n\t"
+                "vmovdqa 128(%0), %%ymm4\n\t"
+                "vmovdqa 160(%0), %%ymm5\n\t"
+                "vmovdqa 192(%0), %%ymm6\n\t"
+                "vmovdqa 224(%0), %%ymm7\n\t"
+                "vmovdqa 256(%0), %%ymm8\n\t"
+                "vmovdqa 288(%0), %%ymm9\n\t"
+                "vmovdqa 320(%0), %%ymm10\n\t"
+                "vmovdqa 352(%0), %%ymm11\n\t"
+                "vmovdqa 384(%0), %%ymm12\n\t"
+                "vmovdqa 416(%0), %%ymm13\n\t"
+                "vmovdqa 448(%0), %%ymm14\n\t"
+                "vmovdqa 480(%0), %%ymm15\n\t"
+                :
+                : "r"(data + offset)
+                : "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
+                  "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
+                  "memory");
+        }
+        if (offset < size) {
+            __m256i a0 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset));
+            __m256i a1 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 32));
+            __m256i a2 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 64));
+            __m256i a3 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 96));
+            __m256i a4 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 128));
+            __m256i a5 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 160));
+            __m256i a6 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 192));
+            __m256i a7 = _mm256_load_si256(reinterpret_cast<const __m256i *>(data + offset + 224));
+            __asm__ volatile("" : "+x"(a0), "+x"(a1), "+x"(a2), "+x"(a3),
+                                 "+x"(a4), "+x"(a5), "+x"(a6), "+x"(a7) : : "memory");
+        }
+    }
+    _mm256_zeroupper();
+    return *reinterpret_cast<const uint64_t *>(data + size - sizeof(uint64_t));
 }
 
 __attribute__((target("avx2"), noinline))
@@ -584,13 +659,28 @@ struct ParallelBuffers {
 
 uint64_t read_adapter(uint8_t *source, uint8_t *, size_t size, uint64_t iterations) {
 #if defined(__x86_64__)
-    return read_avx2(source, size, iterations);
+    return read_accumulating_avx2(source, size, iterations);
 #elif defined(__aarch64__)
     return read_neon(source, size, iterations);
 #else
     (void)source; (void)size; (void)iterations;
     return 0;
 #endif
+}
+
+uint64_t l1_read_adapter(uint8_t *source, uint8_t *, size_t size, uint64_t iterations) {
+#if defined(__x86_64__)
+    return read_sweep_avx2(source, size, iterations);
+#elif defined(__aarch64__)
+    return read_neon(source, size, iterations);
+#else
+    (void)source; (void)size; (void)iterations;
+    return 0;
+#endif
+}
+
+ThroughputKernel read_kernel_for_level(A128Level level) {
+    return level == A128_LEVEL_L1 ? l1_read_adapter : read_adapter;
 }
 
 uint64_t write_adapter(uint8_t *, uint8_t *destination, size_t size, uint64_t iterations) {
@@ -787,6 +877,7 @@ std::vector<double> measure_latency(
     uint8_t *storage,
     size_t size,
     const A128Configuration &configuration,
+    A128Level level,
     const std::function<void(A128ProgressPhase, uint32_t)> &progress = {}
 ) {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -794,8 +885,22 @@ std::vector<double> measure_latency(
     auto *nodes = reinterpret_cast<LatencyNode *>(storage);
     std::vector<uint64_t> order(node_count);
     std::iota(order.begin(), order.end(), 0);
-    std::mt19937_64 generator(0xA128ULL ^ size);
-    std::shuffle(order.begin(), order.end(), generator);
+    if (level == A128_LEVEL_MEMORY) {
+        std::mt19937_64 generator(0xA128ULL ^ size);
+        std::shuffle(order.begin(), order.end(), generator);
+    } else {
+        constexpr size_t kPageBytes = 4096;
+        constexpr size_t kNodesPerPage = kPageBytes / sizeof(LatencyNode);
+        for (size_t base = 0; base < node_count; base += kNodesPerPage) {
+            const size_t end = std::min(node_count, base + kNodesPerPage);
+            std::mt19937_64 generator(0xA128ULL ^ size ^ base);
+            std::shuffle(
+                order.begin() + static_cast<std::ptrdiff_t>(base),
+                order.begin() + static_cast<std::ptrdiff_t>(end),
+                generator
+            );
+        }
+    }
     for (size_t index = 0; index < node_count; ++index) {
         nodes[order[index]].next = order[(index + 1) % node_count];
     }
@@ -878,9 +983,7 @@ std::array<size_t, 4> working_sets(const A128SystemInfo &system) {
     ));
     const uint64_t l3 = !has_usable_l3(system)
         ? 0
-        : aligned_working_set(std::max(
-            saturating_multiply(system.l2_bytes, 2), system.l3_bytes / 2
-        ));
+        : aligned_working_set(system.l3_bytes);
     const uint64_t memory_floor = std::max<uint64_t>(
         saturating_multiply(system.l3_bytes, 4), 128ULL * 1024 * 1024
     );
@@ -893,6 +996,31 @@ A128LevelMask available_level_mask(const A128SystemInfo &system) {
     A128LevelMask mask = A128_LEVEL_MASK_L1 | A128_LEVEL_MASK_L2 | A128_LEVEL_MASK_MEMORY;
     if (has_usable_l3(system)) mask |= A128_LEVEL_MASK_L3;
     return mask;
+}
+
+constexpr uint32_t kKnownRunOptions = A128_RUN_OPTION_EXPERIMENTAL_SYSTEM_CACHE;
+constexpr size_t kRunConfigurationOptionsEnd =
+    offsetof(A128RunConfiguration, options) + sizeof(uint32_t);
+constexpr size_t kRunConfigurationReservedEnd =
+    offsetof(A128RunConfiguration, reserved) + sizeof(uint32_t);
+
+uint32_t run_options(const A128RunConfiguration &configuration) {
+    return configuration.struct_size >= kRunConfigurationOptionsEnd ? configuration.options : 0;
+}
+
+bool has_nonzero_reserved_run_configuration_tail(const A128RunConfiguration &configuration) {
+    return configuration.struct_size >= kRunConfigurationReservedEnd && configuration.reserved != 0;
+}
+
+A128SystemInfo effective_system_for_run(const A128SystemInfo &system, uint32_t options) {
+    A128SystemInfo effective = system;
+    if ((options & A128_RUN_OPTION_EXPERIMENTAL_SYSTEM_CACHE) != 0 && !has_usable_l3(effective)) {
+        const uint64_t experimental_cache = experimental_system_cache_bytes(system);
+        if (is_usable_l3_capacity(effective.l2_bytes, experimental_cache)) {
+            effective.l3_bytes = experimental_cache;
+        }
+    }
+    return effective;
 }
 
 size_t bytes_per_worker(A128Level level, size_t logical_working_set, uint32_t worker_count) {
@@ -1095,11 +1223,18 @@ extern "C" A128Status a128_read_system_info_v2(
             level.l1_data_bytes = read_uint64_sysctl(key);
             std::snprintf(key, sizeof(key), "hw.perflevel%u.l2cachesize", index);
             level.l2_bytes = read_uint64_sysctl(key);
-            const std::string level_name = level.name;
-            if (level_name == "Performance" || level_name == "P") {
+            switch (classify_performance_level(level.name)) {
+            case PerformanceLevelClass::super:
+                discovered.super_core_count += level.physical_core_count;
+                break;
+            case PerformanceLevelClass::performance:
                 discovered.performance_core_count += level.physical_core_count;
-            } else if (level_name == "Efficiency" || level_name == "E") {
+                break;
+            case PerformanceLevelClass::efficiency:
                 discovered.efficiency_core_count += level.physical_core_count;
+                break;
+            case PerformanceLevelClass::unknown:
+                break;
             }
         }
         if (discovered.performance_level_count > 0) {
@@ -1171,7 +1306,7 @@ extern "C" A128Status a128_run_benchmark(
         single_buffers.prefault_all();
         prefault(latency_buffer.data, latency_buffer.size);
         const auto single_reads = measure_parallel_throughput(
-            read_adapter, single_buffers, sizes[index], *configuration
+            read_kernel_for_level(level), single_buffers, sizes[index], *configuration
         );
         const auto single_writes = measure_parallel_throughput(
             write_adapter, single_buffers, sizes[index], *configuration
@@ -1181,7 +1316,7 @@ extern "C" A128Status a128_run_benchmark(
             copy_adapter, single_buffers, single_copy_bytes, *configuration,
             level == A128_LEVEL_MEMORY ? 1.0 : 2.0
         );
-        const auto latencies = measure_latency(latency_buffer.data, latency_size, *configuration);
+        const auto latencies = measure_latency(latency_buffer.data, latency_size, *configuration, level);
         A128Measurement &single = output->measurements[measurement_index++];
         store_throughput_measurement(
             single, level, A128_SCOPE_SINGLE_WORKER, sizes[index],
@@ -1194,17 +1329,13 @@ extern "C" A128Status a128_run_benchmark(
         );
 
         {
-            const uint32_t level_worker_count = level == A128_LEVEL_L3 && output->system.l3_bytes > 0
-                ? std::max<uint32_t>(1, std::min<uint64_t>(
-                    worker_count, output->system.l3_bytes / sizes[index]
-                ))
-                : worker_count;
+            const uint32_t level_worker_count = worker_count;
             const size_t worker_size = bytes_per_worker(level, sizes[index], level_worker_count);
             ParallelBuffers aggregate_buffers(level_worker_count, worker_size);
             if (!aggregate_buffers.valid()) return A128_STATUS_ALLOCATION_FAILED;
             aggregate_buffers.prefault_all();
             const auto aggregate_reads = measure_parallel_throughput(
-                read_adapter, aggregate_buffers, worker_size, *configuration
+                read_kernel_for_level(level), aggregate_buffers, worker_size, *configuration
             );
             const ThroughputKernel aggregate_write_kernel = level == A128_LEVEL_MEMORY
                 ? stream_write_adapter : write_adapter;
@@ -1244,11 +1375,16 @@ extern "C" A128Status a128_run_benchmark_v2(
     try {
     constexpr uint32_t kKnownLevelMask = A128_LEVEL_MASK_ALL;
     constexpr uint32_t kKnownMetricMask = A128_METRIC_MASK_ALL;
-    if (!configuration || !output || configuration->struct_size < sizeof(A128RunConfiguration) ||
+    if (!configuration || !output || configuration->struct_size < A128_RUN_CONFIGURATION_MIN_SIZE ||
         configuration->level_mask == 0 || (configuration->level_mask & ~kKnownLevelMask) != 0 ||
         configuration->metric_mask == 0 || (configuration->metric_mask & ~kKnownMetricMask) != 0 ||
         configuration->sample_count < 3 || configuration->sample_count > 100 ||
         configuration->total_run_nanoseconds < 10'000'000ULL) {
+        return A128_STATUS_INVALID_ARGUMENT;
+    }
+    const uint32_t options = run_options(*configuration);
+    if ((options & ~kKnownRunOptions) != 0 ||
+        has_nonzero_reserved_run_configuration_tail(*configuration)) {
         return A128_STATUS_INVALID_ARGUMENT;
     }
 
@@ -1265,8 +1401,9 @@ extern "C" A128Status a128_run_benchmark_v2(
         ? std::max<uint32_t>(output->system.logical_cpu_count, 1)
         : configuration->throughput_worker_count;
     output->throughput_worker_count = worker_count;
+    const A128SystemInfo planning_system = effective_system_for_run(output->system, options);
     const A128LevelMask effective_level_mask = configuration->level_mask &
-                                               available_level_mask(output->system);
+                                               available_level_mask(planning_system);
     if (effective_level_mask == 0) return A128_STATUS_LEVEL_UNAVAILABLE;
     const uint32_t total_stages = popcount32(effective_level_mask) *
                                   popcount32(configuration->metric_mask);
@@ -1280,7 +1417,7 @@ extern "C" A128Status a128_run_benchmark_v2(
         per_sample_nanoseconds,
         configuration->throughput_worker_count
     };
-    const auto sizes = working_sets(output->system);
+    const auto sizes = working_sets(planning_system);
     const std::array<A128Level, 4> level_order{
         A128_LEVEL_MEMORY, A128_LEVEL_L1, A128_LEVEL_L2, A128_LEVEL_L3
     };
@@ -1316,20 +1453,16 @@ extern "C" A128Status a128_run_benchmark_v2(
                 if (!latency_buffer) return A128_STATUS_ALLOCATION_FAILED;
                 prefault(latency_buffer.data, latency_buffer.size);
                 samples = measure_latency(
-                    latency_buffer.data, logical_size, stage_configuration, stage_progress
+                    latency_buffer.data, logical_size, stage_configuration, level, stage_progress
                 );
                 measurement.latency_nanoseconds = best_latency(samples);
             } else {
-                const uint32_t level_worker_count = level == A128_LEVEL_L3 && output->system.l3_bytes > 0
-                    ? std::max<uint32_t>(1, std::min<uint64_t>(
-                        worker_count, output->system.l3_bytes / logical_size
-                    ))
-                    : worker_count;
+                const uint32_t level_worker_count = worker_count;
                 const size_t worker_size = bytes_per_worker(level, logical_size, level_worker_count);
                 ParallelBuffers buffers(level_worker_count, worker_size);
                 if (!buffers.valid()) return A128_STATUS_ALLOCATION_FAILED;
                 buffers.prefault_all();
-                ThroughputKernel kernel = read_adapter;
+                ThroughputKernel kernel = read_kernel_for_level(level);
                 double traffic_factor = 1.0;
                 size_t operation_size = worker_size;
                 if (metric == A128_METRIC_WRITE) {

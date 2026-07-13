@@ -62,14 +62,26 @@ typedef enum A128ProgressPhase {
     A128_PROGRESS_RUN_COMPLETED = 4
 } A128ProgressPhase;
 
+typedef enum A128RunOption {
+    A128_RUN_OPTION_EXPERIMENTAL_SYSTEM_CACHE = 1u << 0
+} A128RunOption;
+
 typedef struct A128RunConfiguration {
+    /* Prefix-sized contract. Callers compiled against an older header may pass
+       A128_RUN_CONFIGURATION_MIN_SIZE and omit options/reserved. Providers read
+       tail fields only when struct_size reaches the complete field. */
     uint32_t struct_size;
     A128LevelMask level_mask;
     A128MetricMask metric_mask;
     uint32_t sample_count;
     uint32_t throughput_worker_count;
     uint64_t total_run_nanoseconds;
+    uint32_t options;
+    uint32_t reserved;
 } A128RunConfiguration;
+
+#define A128_RUN_CONFIGURATION_MIN_SIZE \
+    (offsetof(A128RunConfiguration, total_run_nanoseconds) + sizeof(uint64_t))
 
 typedef struct A128Configuration {
     uint32_t sample_count;
@@ -110,7 +122,7 @@ typedef struct A128SystemInfo {
 
 enum {
     A128_MAX_PERFORMANCE_LEVELS = 4,
-    A128_SYSTEM_INFO_V2_SCHEMA_VERSION = 2
+    A128_SYSTEM_INFO_V2_SCHEMA_VERSION = 3
 };
 
 typedef enum A128ProvenanceKind {
@@ -173,6 +185,8 @@ typedef struct A128SystemInfoV2 {
     A128Provenance gpu_provenance;
     A128Provenance system_cache_provenance;
     A128Provenance firmware_provenance;
+    uint32_t super_core_count;
+    uint32_t reserved0;
 } A128SystemInfoV2;
 
 /* Every successful V2 read contains these fields. Later fields are present only

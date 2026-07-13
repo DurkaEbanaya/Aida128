@@ -18,6 +18,18 @@ public struct BenchmarkConfiguration: Sendable {
     }
 }
 
+public struct BenchmarkRunOptions: OptionSet, Sendable {
+    public let rawValue: UInt32
+
+    public init(rawValue: UInt32) {
+        self.rawValue = rawValue
+    }
+
+    public static let experimentalSystemCache = BenchmarkRunOptions(
+        rawValue: UInt32(A128_RUN_OPTION_EXPERIMENTAL_SYSTEM_CACHE.rawValue)
+    )
+}
+
 public struct SystemInformation: Codable, Sendable {
     public let cpuName: String
     public let architecture: String
@@ -53,8 +65,23 @@ public struct SystemInformation: Codable, Sendable {
         level != .l3 || (l2Bytes > 0 && l2Bytes <= l3Bytes / 2)
     }
 
+    public func isRunnable(_ level: CacheLevel, options: BenchmarkRunOptions = []) -> Bool {
+        guard !isAvailable(level) else { return true }
+        guard level == .l3,
+              options.contains(.experimentalSystemCache),
+              architecture == "arm64",
+              let metadata = hardwareMetadata else {
+            return false
+        }
+        return l2Bytes > 0 && l2Bytes <= metadata.systemCacheBytes / 2
+    }
+
     public var availableLevels: Set<CacheLevel> {
         Set(CacheLevel.allCases.filter(isAvailable))
+    }
+
+    public func availableLevels(options: BenchmarkRunOptions) -> Set<CacheLevel> {
+        Set(CacheLevel.allCases.filter { isRunnable($0, options: options) })
     }
 
     public func displayName(for level: CacheLevel) -> String {
@@ -106,6 +133,7 @@ public struct HardwareMetadata: Codable, Sendable {
     public let systemFirmware: String
     public let osLoaderVersion: String
     public let physicalCoreCount: UInt32
+    public let superCoreCount: UInt32
     public let performanceCoreCount: UInt32
     public let efficiencyCoreCount: UInt32
     public let performanceMaxMegahertz: UInt32
@@ -126,6 +154,123 @@ public struct HardwareMetadata: Codable, Sendable {
     public let firmwareProvenance: DiscoveryProvenance
     public let hardwareModelProvenance: DiscoveryProvenance?
     public let osLoaderProvenance: DiscoveryProvenance?
+
+    public init(
+        socName: String,
+        socIdentifier: String,
+        processNode: String,
+        instructionSet: String,
+        hardwareModel: String,
+        boardIdentifier: String,
+        memoryTechnology: String,
+        gpuName: String?,
+        systemFirmware: String,
+        osLoaderVersion: String,
+        physicalCoreCount: UInt32,
+        superCoreCount: UInt32 = 0,
+        performanceCoreCount: UInt32,
+        efficiencyCoreCount: UInt32,
+        performanceMaxMegahertz: UInt32,
+        efficiencyMaxMegahertz: UInt32,
+        gpuCoreCount: UInt32,
+        gpuMaxMegahertz: UInt32,
+        neuralEngineCoreCount: UInt32,
+        memoryBandwidthGigabytesPerSecond: UInt32,
+        memoryDataRateMTPS: UInt32,
+        performanceLevels: [CPUPerformanceLevel],
+        systemCacheBytes: UInt64,
+        socProvenance: DiscoveryProvenance,
+        clockProvenance: DiscoveryProvenance,
+        topologyProvenance: DiscoveryProvenance,
+        memoryProvenance: DiscoveryProvenance,
+        gpuProvenance: DiscoveryProvenance,
+        systemCacheProvenance: DiscoveryProvenance,
+        firmwareProvenance: DiscoveryProvenance,
+        hardwareModelProvenance: DiscoveryProvenance?,
+        osLoaderProvenance: DiscoveryProvenance?
+    ) {
+        self.socName = socName
+        self.socIdentifier = socIdentifier
+        self.processNode = processNode
+        self.instructionSet = instructionSet
+        self.hardwareModel = hardwareModel
+        self.boardIdentifier = boardIdentifier
+        self.memoryTechnology = memoryTechnology
+        self.gpuName = gpuName
+        self.systemFirmware = systemFirmware
+        self.osLoaderVersion = osLoaderVersion
+        self.physicalCoreCount = physicalCoreCount
+        self.superCoreCount = superCoreCount
+        self.performanceCoreCount = performanceCoreCount
+        self.efficiencyCoreCount = efficiencyCoreCount
+        self.performanceMaxMegahertz = performanceMaxMegahertz
+        self.efficiencyMaxMegahertz = efficiencyMaxMegahertz
+        self.gpuCoreCount = gpuCoreCount
+        self.gpuMaxMegahertz = gpuMaxMegahertz
+        self.neuralEngineCoreCount = neuralEngineCoreCount
+        self.memoryBandwidthGigabytesPerSecond = memoryBandwidthGigabytesPerSecond
+        self.memoryDataRateMTPS = memoryDataRateMTPS
+        self.performanceLevels = performanceLevels
+        self.systemCacheBytes = systemCacheBytes
+        self.socProvenance = socProvenance
+        self.clockProvenance = clockProvenance
+        self.topologyProvenance = topologyProvenance
+        self.memoryProvenance = memoryProvenance
+        self.gpuProvenance = gpuProvenance
+        self.systemCacheProvenance = systemCacheProvenance
+        self.firmwareProvenance = firmwareProvenance
+        self.hardwareModelProvenance = hardwareModelProvenance
+        self.osLoaderProvenance = osLoaderProvenance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case socName, socIdentifier, processNode, instructionSet, hardwareModel, boardIdentifier
+        case memoryTechnology, gpuName, systemFirmware, osLoaderVersion, physicalCoreCount
+        case superCoreCount, performanceCoreCount, efficiencyCoreCount, performanceMaxMegahertz
+        case efficiencyMaxMegahertz, gpuCoreCount, gpuMaxMegahertz, neuralEngineCoreCount
+        case memoryBandwidthGigabytesPerSecond, memoryDataRateMTPS, performanceLevels
+        case systemCacheBytes, socProvenance, clockProvenance, topologyProvenance
+        case memoryProvenance, gpuProvenance, systemCacheProvenance, firmwareProvenance
+        case hardwareModelProvenance, osLoaderProvenance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            socName: container.decode(String.self, forKey: .socName),
+            socIdentifier: container.decode(String.self, forKey: .socIdentifier),
+            processNode: container.decode(String.self, forKey: .processNode),
+            instructionSet: container.decode(String.self, forKey: .instructionSet),
+            hardwareModel: container.decode(String.self, forKey: .hardwareModel),
+            boardIdentifier: container.decode(String.self, forKey: .boardIdentifier),
+            memoryTechnology: container.decode(String.self, forKey: .memoryTechnology),
+            gpuName: container.decodeIfPresent(String.self, forKey: .gpuName),
+            systemFirmware: container.decode(String.self, forKey: .systemFirmware),
+            osLoaderVersion: container.decode(String.self, forKey: .osLoaderVersion),
+            physicalCoreCount: container.decode(UInt32.self, forKey: .physicalCoreCount),
+            superCoreCount: container.decodeIfPresent(UInt32.self, forKey: .superCoreCount) ?? 0,
+            performanceCoreCount: container.decode(UInt32.self, forKey: .performanceCoreCount),
+            efficiencyCoreCount: container.decode(UInt32.self, forKey: .efficiencyCoreCount),
+            performanceMaxMegahertz: container.decode(UInt32.self, forKey: .performanceMaxMegahertz),
+            efficiencyMaxMegahertz: container.decode(UInt32.self, forKey: .efficiencyMaxMegahertz),
+            gpuCoreCount: container.decode(UInt32.self, forKey: .gpuCoreCount),
+            gpuMaxMegahertz: container.decode(UInt32.self, forKey: .gpuMaxMegahertz),
+            neuralEngineCoreCount: container.decode(UInt32.self, forKey: .neuralEngineCoreCount),
+            memoryBandwidthGigabytesPerSecond: container.decode(UInt32.self, forKey: .memoryBandwidthGigabytesPerSecond),
+            memoryDataRateMTPS: container.decode(UInt32.self, forKey: .memoryDataRateMTPS),
+            performanceLevels: container.decode([CPUPerformanceLevel].self, forKey: .performanceLevels),
+            systemCacheBytes: container.decode(UInt64.self, forKey: .systemCacheBytes),
+            socProvenance: container.decode(DiscoveryProvenance.self, forKey: .socProvenance),
+            clockProvenance: container.decode(DiscoveryProvenance.self, forKey: .clockProvenance),
+            topologyProvenance: container.decode(DiscoveryProvenance.self, forKey: .topologyProvenance),
+            memoryProvenance: container.decode(DiscoveryProvenance.self, forKey: .memoryProvenance),
+            gpuProvenance: container.decode(DiscoveryProvenance.self, forKey: .gpuProvenance),
+            systemCacheProvenance: container.decode(DiscoveryProvenance.self, forKey: .systemCacheProvenance),
+            firmwareProvenance: container.decode(DiscoveryProvenance.self, forKey: .firmwareProvenance),
+            hardwareModelProvenance: container.decodeIfPresent(DiscoveryProvenance.self, forKey: .hardwareModelProvenance),
+            osLoaderProvenance: container.decodeIfPresent(DiscoveryProvenance.self, forKey: .osLoaderProvenance)
+        )
+    }
 }
 
 public enum CacheLevel: String, Codable, Sendable, CaseIterable {
@@ -245,30 +390,29 @@ public struct BenchmarkReport: Codable, Sendable {
 
     public var aidaMeasurements: [BenchmarkMeasurement] {
         CacheLevel.allCases.compactMap { level in
-            if let combined = measurements.first(where: {
-                $0.level == level && $0.readGigabytesPerSecond != nil &&
-                    $0.writeGigabytesPerSecond != nil && $0.copyGigabytesPerSecond != nil &&
-                    $0.latencyNanoseconds != nil
-            }) {
-                return combined
-            }
-            guard let throughput = measurements.first(where: {
+            if let throughput = measurements.first(where: {
                 $0.level == level && $0.scope == .aggregate
             }), let latency = measurements.first(where: {
                 $0.level == level && $0.scope == .singleWorker
-            }) else { return nil }
-            return BenchmarkMeasurement(
-                level: level,
-                scope: .aggregate,
-                workingSetBytes: throughput.workingSetBytes,
-                readGigabytesPerSecond: throughput.readGigabytesPerSecond,
-                writeGigabytesPerSecond: throughput.writeGigabytesPerSecond,
-                copyGigabytesPerSecond: throughput.copyGigabytesPerSecond,
-                latencyNanoseconds: latency.latencyNanoseconds,
-                maximumRelativeSpread: max(
-                    throughput.maximumRelativeSpread, latency.maximumRelativeSpread
+            }) {
+                return BenchmarkMeasurement(
+                    level: level,
+                    scope: .aggregate,
+                    workingSetBytes: throughput.workingSetBytes,
+                    readGigabytesPerSecond: throughput.readGigabytesPerSecond,
+                    writeGigabytesPerSecond: throughput.writeGigabytesPerSecond,
+                    copyGigabytesPerSecond: throughput.copyGigabytesPerSecond,
+                    latencyNanoseconds: latency.latencyNanoseconds,
+                    maximumRelativeSpread: max(
+                        throughput.maximumRelativeSpread, latency.maximumRelativeSpread
+                    )
                 )
-            )
+            }
+            return measurements.first {
+                $0.level == level && $0.readGigabytesPerSecond != nil &&
+                    $0.writeGigabytesPerSecond != nil && $0.copyGigabytesPerSecond != nil &&
+                    $0.latencyNanoseconds != nil
+            }
         }
     }
 }
@@ -335,6 +479,7 @@ public enum BenchmarkRunner {
         totalDuration: Duration,
         sampleCount: UInt32 = 5,
         throughputWorkerCount: UInt32 = 0,
+        runOptions: BenchmarkRunOptions = [],
         progress: @escaping @Sendable (BenchmarkProgress) -> Void
     ) throws -> BenchmarkReport {
         guard !selection.levels.isEmpty, !selection.metrics.isEmpty else {
@@ -352,7 +497,9 @@ public enum BenchmarkRunner {
             metric_mask: metricMask(selection.metrics),
             sample_count: sampleCount,
             throughput_worker_count: throughputWorkerCount,
-            total_run_nanoseconds: nanoseconds
+            total_run_nanoseconds: nanoseconds,
+            options: runOptions.rawValue,
+            reserved: 0
         )
         var nativeReport = A128Report()
         let box = ProgressBox(callback: progress)
@@ -468,6 +615,7 @@ public enum BenchmarkRunner {
             systemFirmware: profilerFirmware ?? metadata.systemFirmware,
             osLoaderVersion: profiler.osLoaderVersion ?? metadata.osLoaderVersion,
             physicalCoreCount: metadata.physicalCoreCount,
+            superCoreCount: metadata.superCoreCount,
             performanceCoreCount: metadata.performanceCoreCount,
             efficiencyCoreCount: metadata.efficiencyCoreCount,
             performanceMaxMegahertz: metadata.performanceMaxMegahertz,
@@ -560,6 +708,7 @@ public enum BenchmarkRunner {
             systemFirmware: string(from: native.system_firmware),
             osLoaderVersion: string(from: native.os_loader_version),
             physicalCoreCount: native.physical_core_count,
+            superCoreCount: native.super_core_count,
             performanceCoreCount: native.performance_core_count,
             efficiencyCoreCount: native.efficiency_core_count,
             performanceMaxMegahertz: native.performance_max_megahertz,

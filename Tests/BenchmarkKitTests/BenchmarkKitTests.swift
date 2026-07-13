@@ -94,6 +94,22 @@ struct NativeBenchmarkTests {
     #expect(decoded.system.architecture == system.architecture)
 }
 
+@Test func reportsWithLegacyHardwareMetadataStillDecode() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    let report = BenchmarkReport(system: system, measurements: [], throughputWorkerCount: 1)
+    let encoded = try JSONEncoder().encode(report)
+    var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    var legacySystem = try #require(object["system"] as? [String: Any])
+    guard var metadata = legacySystem["hardwareMetadata"] as? [String: Any] else { return }
+    metadata.removeValue(forKey: "superCoreCount")
+    legacySystem["hardwareMetadata"] = metadata
+    object["system"] = legacySystem
+    let legacyData = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(BenchmarkReport.self, from: legacyData)
+    #expect(decoded.system.hardwareMetadata?.superCoreCount == 0)
+    #expect(decoded.system.architecture == system.architecture)
+}
+
 @Test func swiftAvailabilityMatchesNativeLLCContainmentBoundary() throws {
     let system = try BenchmarkRunner.systemInformation()
     func replacingCacheHierarchy(l2Bytes: UInt64, l3Bytes: UInt64) throws -> SystemInformation {
@@ -111,6 +127,56 @@ struct NativeBenchmarkTests {
     let available = try replacingCacheHierarchy(l2Bytes: 8, l3Bytes: 16)
     #expect(!unavailable.isAvailable(.l3))
     #expect(available.isAvailable(.l3))
+}
+
+@Test func experimentalSystemCacheIsExplicitRunIntent() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    var object = try #require(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(system)) as? [String: Any]
+    )
+    var metadata = try #require(object["hardwareMetadata"] as? [String: Any])
+    object["architecture"] = "arm64"
+    object["l2Bytes"] = UInt64(8)
+    object["l3Bytes"] = UInt64(0)
+    metadata["systemCacheBytes"] = UInt64(16)
+    object["hardwareMetadata"] = metadata
+    let experimentalCandidate = try JSONDecoder().decode(
+        SystemInformation.self,
+        from: JSONSerialization.data(withJSONObject: object)
+    )
+    #expect(!experimentalCandidate.isAvailable(.l3))
+    #expect(!experimentalCandidate.isRunnable(.l3))
+    #expect(experimentalCandidate.isRunnable(.l3, options: [.experimentalSystemCache]))
+}
+
+@Test func runConfigurationPrefixSizeAndOptionBitsAreContracted() throws {
+    let prefixSize = MemoryLayout<A128RunConfiguration>
+        .offset(of: \A128RunConfiguration.total_run_nanoseconds)! + MemoryLayout<UInt64>.size
+    var prefixConfiguration = A128RunConfiguration(
+        struct_size: UInt32(prefixSize),
+        level_mask: UInt32(A128_LEVEL_MASK_MEMORY),
+        metric_mask: UInt32(A128_METRIC_READ.rawValue),
+        sample_count: 3,
+        throughput_worker_count: 1,
+        total_run_nanoseconds: 30_000_000,
+        options: UInt32.max,
+        reserved: UInt32.max
+    )
+    var report = A128Report()
+    #expect(a128_run_benchmark_v2(&prefixConfiguration, nil, nil, &report) == A128_STATUS_OK)
+    #expect(report.measurement_count == 1)
+
+    var invalidOptions = prefixConfiguration
+    invalidOptions.struct_size = UInt32(MemoryLayout<A128RunConfiguration>.size)
+    invalidOptions.options = 1 << 31
+    invalidOptions.reserved = 0
+    #expect(a128_run_benchmark_v2(&invalidOptions, nil, nil, &report) == A128_STATUS_INVALID_ARGUMENT)
+
+    var invalidReserved = prefixConfiguration
+    invalidReserved.struct_size = UInt32(MemoryLayout<A128RunConfiguration>.size)
+    invalidReserved.options = UInt32(A128_RUN_OPTION_EXPERIMENTAL_SYSTEM_CACHE.rawValue)
+    invalidReserved.reserved = 1
+    #expect(a128_run_benchmark_v2(&invalidReserved, nil, nil, &report) == A128_STATUS_INVALID_ARGUMENT)
 }
 
 @Test func selectedCellRunsOnlyRequestedStage() throws {
@@ -143,6 +209,44 @@ struct NativeBenchmarkTests {
     #expect(report.aidaMeasurements.count == 1)
     #expect(report.aidaMeasurements[0].level == .l1)
     #expect(report.aidaMeasurements[0].latencyNanoseconds != nil)
+}
+
+@Test func aidaMeasurementsMergeAggregateThroughputWithSingleLatency() throws {
+    let system = try BenchmarkRunner.systemInformation()
+    let report = BenchmarkReport(
+        system: system,
+        measurements: [
+            BenchmarkMeasurement(
+                level: .l1,
+                scope: .singleWorker,
+                workingSetBytes: 24 * 1024,
+                readGigabytesPerSecond: 1,
+                writeGigabytesPerSecond: 2,
+                copyGigabytesPerSecond: 3,
+                latencyNanoseconds: 4,
+                maximumRelativeSpread: 0.1
+            ),
+            BenchmarkMeasurement(
+                level: .l1,
+                scope: .aggregate,
+                workingSetBytes: 480 * 1024,
+                readGigabytesPerSecond: 10,
+                writeGigabytesPerSecond: 20,
+                copyGigabytesPerSecond: 30,
+                latencyNanoseconds: nil,
+                maximumRelativeSpread: 0.2
+            ),
+        ],
+        throughputWorkerCount: 20
+    )
+    let row = try #require(report.aidaMeasurements.first)
+    #expect(row.scope == .aggregate)
+    #expect(row.workingSetBytes == 480 * 1024)
+    #expect(row.readGigabytesPerSecond == 10)
+    #expect(row.writeGigabytesPerSecond == 20)
+    #expect(row.copyGigabytesPerSecond == 30)
+    #expect(row.latencyNanoseconds == 4)
+    #expect(row.maximumRelativeSpread == 0.2)
 }
 
 @Test func selectedRowUsesVisibleMetricOrder() throws {

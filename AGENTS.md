@@ -19,7 +19,7 @@ Tech stack: Swift 6 / SwiftUI / AppKit, C++20, Swift Package Manager, IOKit, Mac
 - Swift passes benchmark intent only. Cache sizes, ISA, topology, and iteration calibration belong to `BenchmarkCore`.
 - GUI progress must come from native callbacks after real work; never synthesize progress or parse LLM/text output.
 - Throughput is aggregate; latency is a single dependent chain. Do not mix their semantics silently.
-- Full V2 runs execute four metrics for every verified level in `Memory → L1 → L2 → last-level cache` order. The legacy L3 ABI slot means CPU L3 on Intel and System Cache (SLC) on Apple Silicon. Apple SLC runs require a runtime-verified exact capacity; catalog estimates are display-only and unknown SoCs remain unavailable.
+- Full V2 runs execute four metrics for every verified level in `Memory → L1 → L2 → last-level cache` order. The legacy L3 ABI slot means CPU L3 on Intel and System Cache (SLC) on Apple Silicon. Apple SLC runs require a runtime-verified exact capacity unless the user explicitly enables experimental SLC; catalog-estimate runs must stay provenance-marked and unknown SoCs remain unavailable.
 - Native runs are process-wide serialized; overlapping benchmarks are invalid.
 - Preserve old `a128_run_benchmark` compatibility when evolving the versioned C ABI.
 - ARM cross-build is not runtime proof. Stable release requires real Apple Silicon CI/device validation.
@@ -31,7 +31,7 @@ Tech stack: Swift 6 / SwiftUI / AppKit, C++20, Swift Package Manager, IOKit, Mac
 - Test: `swift test`
 - ASan: `swift test --sanitize=address`
 - TSan: `swift test --sanitize=thread`
-- Universal 2: `VERSION=0.1.0-rc.2 scripts/build-universal.sh`
+- Universal 2: `VERSION=1.0.0 scripts/build-universal.sh`
 
 After shared API/core changes, run the full tests, both sanitizers, x86 release, arm64 release cross-build, and Universal 2 slice verification.
 

@@ -36,7 +36,7 @@ swift build -c release \
 ## Universal 2 app and CLI
 
 ```bash
-VERSION=0.1.0-rc.2 scripts/build-universal.sh
+VERSION=1.0.0 scripts/build-universal.sh
 ```
 
 The script builds each architecture independently and combines corresponding executables with `lipo`. It verifies both slices and ad-hoc signs the app bundle.

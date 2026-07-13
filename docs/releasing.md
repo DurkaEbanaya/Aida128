@@ -6,11 +6,11 @@
 2. `swift test --sanitize=address`
 3. `swift test --sanitize=thread`
 4. Intel release build and benchmark smoke run
-5. ARM64 release build
-6. Universal 2 packaging and architecture verification
-7. Apple Silicon native tests, CLI smoke run, and JSON report review in CI
-8. Physical Apple Silicon GUI and CLI smoke run
-9. Publish stable release only after all gates pass
+5. Package-consumer executable smoke run
+6. ARM64 release build
+7. Universal 2 packaging and architecture verification
+8. Apple Silicon native tests, CLI smoke run, and JSON report review in CI
+9. Physical Apple Silicon GUI and CLI smoke run when available
 
 ## Apple Silicon validation
 
@@ -28,6 +28,6 @@ Expected architecture is `arm64`, backend is `ARM NEON cached`, all selected met
 
 The public script uses ad-hoc signing. A trusted distribution should use a Developer ID Application certificate, hardened runtime, notarization, and stapling. Do not describe an ad-hoc package as notarized.
 
-## Release candidate policy
+## Validation disclosure policy
 
-Artifacts may be published as a GitHub prerelease after hosted arm64 native/CLI validation, provided the release notes state that physical-device GUI validation is pending. Stable `v0.1.0` requires that physical-device gate.
+Release notes must state which gates passed for that artifact. If physical Apple Silicon GUI validation, Developer ID signing, notarization, or stapling are unavailable, the release must say so explicitly instead of implying full platform/distribution validation.

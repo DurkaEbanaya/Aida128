@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${VERSION:-0.1.0-rc.2}"
+VERSION="${VERSION:-1.0.0}"
 MARKETING_VERSION="${MARKETING_VERSION:-${VERSION%%-*}}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT/.build-universal}"

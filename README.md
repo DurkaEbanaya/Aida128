@@ -23,10 +23,10 @@ A native macOS cache and memory benchmark inspired by the compact workflow of AI
 
 | Platform | Backend | Status |
 | --- | --- | --- |
-| Intel macOS x86_64 | AVX2 | Runtime and sanitizer tested on Intel Core i5-14600KF |
-| Apple Silicon arm64 | NEON/ASIMD | Native tests and CLI smoke verified on a GitHub-hosted Apple M1 VM; physical-device GUI validation is required before stable v0.1.0 |
+| Intel macOS x86_64 | AVX2 | Runtime, sanitizer, GUI, CLI, and Universal 2 packaging tested on Intel Core i5-14600KF |
+| Apple Silicon arm64 | NEON/ASIMD | Native tests and CLI smoke verified on a GitHub-hosted Apple M1 VM; local release builds include an arm64 slice, but physical-device GUI validation remains pending |
 
-The current release candidate is intentionally marked prerelease. GitHub Actions has executed the native tests and benchmark CLI on arm64, but a hosted VM does not replace GUI validation on a physical Apple Silicon Mac.
+The 1.0.0 package is ad-hoc signed and not notarized. GitHub Actions has executed the native tests and benchmark CLI on arm64, but a hosted VM does not replace GUI validation on a physical Apple Silicon Mac.
 
 ## Run from source
 
@@ -50,7 +50,7 @@ swift run -c release aida128-bench --format json --output result.json
 
 ```bash
 chmod +x scripts/build-universal.sh
-VERSION=0.1.0-rc.2 scripts/build-universal.sh
+VERSION=1.0.0 scripts/build-universal.sh
 ```
 
 Artifacts are written to `dist/`. The app is ad-hoc signed because the project does not have a Developer ID certificate. On first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.
@@ -67,7 +67,7 @@ The benchmark does not multiply results to imitate another product. The measured
 - Current dynamic clocks, DRAM primary timings, and command rate are not exposed by public macOS APIs.
 - On OpenCore systems, spoofed SMBIOS values are identified rather than presented as the physical motherboard or BIOS.
 - macOS does not expose supported hard CPU affinity; scheduler migration remains visible through result spread.
-- Apple Silicon System Cache metadata exposes provenance in tooltips. Experimental catalog capacities do not enable benchmark execution; unknown or unverified SLC capacities remain `N/A` instead of being guessed.
+- Apple Silicon System Cache metadata exposes provenance in tooltips. Experimental catalog capacities are not used in verified mode; they can enter benchmark planning only through the explicit **Experimental SLC** opt-in and remain marked as estimates.
 
 ## Development
 

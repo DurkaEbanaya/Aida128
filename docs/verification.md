@@ -42,7 +42,7 @@ Verified on GitHub's Apple M1 virtual runner in CI run `29249845148`. Raw `sysct
 
 CI run `29257079821` additionally verified `hw.perflevel*` topology/cache keys and sanitized `system_profiler` fields for chip name, hardware model, system firmware, and OS loader. The hosted VM exposes no GPU record, so GPU metadata remains optional.
 
-For the base Apple M5 catalog, Apple specifications provide the CPU and Neural Engine configuration and memory bandwidth. Maximum P/E clocks come from a device analysis, while the approximately 32 MiB SLC capacity is experimental third-party cache-analysis data. Those values are typed as mapped or experimental and expose their source in UI tooltips; they are not presented as live macOS readings. GPU identity and enabled core count are shown only when the running macOS system reports them through `system_profiler`.
+For the base Apple M5 catalog, Apple specifications provide the CPU and Neural Engine configuration and memory bandwidth. Maximum fast-core/E-core clocks come from a device analysis, while the approximately 32 MiB SLC capacity is experimental third-party cache-analysis data. Those values are typed as mapped or experimental and expose their source in UI tooltips; they are not presented as live macOS readings. GPU identity and enabled core count are shown only when the running macOS system reports them through `system_profiler`. In default verified mode the SLC estimate is display-only; benchmark planning can use it only when the user enables the explicit experimental SLC option.
 
 ## Extended platform information
 

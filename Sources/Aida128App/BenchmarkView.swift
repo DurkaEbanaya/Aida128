@@ -60,6 +60,10 @@ struct BenchmarkView: View {
                 .labelsHidden()
                 .frame(width: 82)
                 .disabled(model.isRunning)
+                Toggle("Experimental SLC", isOn: $model.experimentalSystemCacheEnabled)
+                    .toggleStyle(.checkbox)
+                    .disabled(model.isRunning || !model.canEnableExperimentalSystemCache)
+                    .help("Default mode benchmarks only runtime-verified cache levels. This opt-in allows an experimental catalog SLC capacity to enter native planning and marks the result as experimental.")
                 HStack(spacing: 2) {
                     ForEach(ThemePreference.allCases, id: \.self) { option in
                         RevealButton(
@@ -167,12 +171,10 @@ struct BenchmarkView: View {
             infoRow("System Cache", appleSystemCacheText, help: metadata?.systemCacheProvenance.tooltip)
             infoRow("Unified Memory", appleMemoryText, help: metadata?.memoryProvenance.tooltip)
             infoRow("Memory Packaging", "On-package unified memory · physical die organization not exposed by macOS")
-            infoRow("DRAM Timings / CR", "Not exposed by macOS")
             infoRow("Integrated GPU", appleGPUText, help: metadata?.gpuProvenance.tooltip)
             infoRow("Neural Engine", appleNeuralEngineText, help: metadata?.socProvenance.tooltip)
             infoRow("Hardware Model", metadata?.hardwareModel.nilIfEmpty ?? "Unavailable", help: metadata?.hardwareModelProvenance?.tooltip)
             infoRow("SoC ID", metadata?.socIdentifier.nilIfEmpty ?? "Unavailable", help: metadata?.socProvenance.tooltip)
-            infoRow("Board ID", metadata?.boardIdentifier.nilIfEmpty ?? "Unavailable")
             infoRow("System Firmware", metadata?.systemFirmware.nilIfEmpty ?? "Unavailable", help: metadata?.firmwareProvenance.tooltip)
             infoRow("OS Loader", metadata?.osLoaderVersion.nilIfEmpty ?? "Unavailable", help: metadata?.osLoaderProvenance?.tooltip)
             infoRow("Benchmark Mode", model.report.map {
@@ -214,7 +216,7 @@ struct BenchmarkView: View {
 
     private func benchmarkRowButton(_ level: CacheLevel) -> some View {
         RevealButton(
-            enabled: !model.isRunning && model.isAvailable(level),
+            enabled: !model.isRunning && model.isRunnable(level),
             selected: model.activeLevel == level && model.activeMetric == nil,
             action: { model.runRow(level) }
         ) {
@@ -232,7 +234,7 @@ struct BenchmarkView: View {
 
     private func benchmarkCell(level: CacheLevel, metric: BenchmarkMetric) -> some View {
         RevealButton(
-            enabled: !model.isRunning && model.isAvailable(level),
+            enabled: !model.isRunning && model.isRunnable(level),
             selected: model.activeLevel == level && model.activeMetric == metric,
             action: { model.runCell(level: level, metric: metric) }
         ) {
@@ -245,7 +247,7 @@ struct BenchmarkView: View {
     }
 
     private func resultText(level: CacheLevel, metric: BenchmarkMetric) -> Text {
-        guard model.isAvailable(level) else { return Text("N/A") }
+        guard model.isRunnable(level) || model.measurements[level] != nil else { return Text("N/A") }
         guard let measurement = model.measurements[level] else { return Text("") }
         let value: Double? = switch metric {
         case .read: measurement.readGigabytesPerSecond
@@ -360,6 +362,9 @@ struct BenchmarkView: View {
     private var appleTopologyText: String {
         guard let system = model.systemInformation, let metadata = system.hardwareMetadata else { return "Unavailable" }
         let total = metadata.physicalCoreCount > 0 ? metadata.physicalCoreCount : system.logicalCPUCount
+        if metadata.superCoreCount > 0 {
+            return "\(total) cores / \(system.logicalCPUCount) threads · \(metadata.superCoreCount)S + \(metadata.performanceCoreCount)P + \(metadata.efficiencyCoreCount)E"
+        }
         if metadata.performanceCoreCount > 0 || metadata.efficiencyCoreCount > 0 {
             return "\(total) cores / \(system.logicalCPUCount) threads · \(metadata.performanceCoreCount)P + \(metadata.efficiencyCoreCount)E"
         }
@@ -371,7 +376,8 @@ struct BenchmarkView: View {
               metadata.performanceMaxMegahertz > 0 else { return "Unavailable" }
         let p = Double(metadata.performanceMaxMegahertz) / 1000
         let e = Double(metadata.efficiencyMaxMegahertz) / 1000
-        return String(format: "P up to %.3g GHz · E up to %.3g GHz", p, e)
+        let fastLabel = metadata.superCoreCount > 0 && metadata.performanceCoreCount == 0 ? "S" : "P"
+        return String(format: "\(fastLabel) up to %.3g GHz · E up to %.3g GHz", p, e)
     }
 
     private func performanceLevelLabel(_ level: CPUPerformanceLevel, index: Int) -> String {
@@ -387,7 +393,10 @@ struct BenchmarkView: View {
         guard let metadata = model.systemInformation?.hardwareMetadata, metadata.systemCacheBytes > 0 else {
             return "Capacity unavailable"
         }
-        return "System Level Cache · approximately \(bytes(metadata.systemCacheBytes))"
+        if metadata.systemCacheProvenance.kind == .experimental {
+            return "System Level Cache · experimental estimate \(bytes(metadata.systemCacheBytes))"
+        }
+        return "System Level Cache · \(bytes(metadata.systemCacheBytes))"
     }
 
     private var appleMemoryText: String {
