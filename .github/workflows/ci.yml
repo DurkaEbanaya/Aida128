@@ -22,10 +22,36 @@ jobs:
         run: |
           {
             uname -m
+            sysctl hw.model hw.machine hw.targettype hw.cpufamily hw.cputype hw.cpusubtype
             sysctl hw.cacheconfig hw.cachesize hw.l1dcachesize hw.l2cachesize hw.l3cachesize
-            sysctl -a | /usr/bin/sort | /usr/bin/grep '^hw\.perflevel.*\(cache\|cpu\)' || true
+            sysctl -a | /usr/bin/sort | /usr/bin/grep '^hw\.perflevel' || true
           } > apple-cache-contract.txt 2>&1
+          system_profiler SPHardwareDataType SPDisplaysDataType -json |
+            /usr/bin/python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          hardware_keys = {"chip_type", "machine_model", "machine_name", "number_processors", "physical_memory", "boot_rom_version", "os_loader_version"}
+          display_keys = {"_name", "sppci_model", "sppci_cores", "spdisplays_vram", "spdisplays_vendor", "spdisplays_device-id"}
+          output = {
+              "hardware": [{k: v for k, v in item.items() if k in hardware_keys} for item in data.get("SPHardwareDataType", [])],
+              "displays": [{k: v for k, v in item.items() if k in display_keys} for item in data.get("SPDisplaysDataType", [])],
+          }
+          json.dump(output, sys.stdout, indent=2, sort_keys=True)
+          ' > apple-system-profiler-contract.json
+          ioreg -p IODeviceTree -r -d 1 -c IOPlatformExpertDevice -a |
+            /usr/bin/python3 -c '
+          import json, plistlib, sys
+          entries = plistlib.loads(sys.stdin.buffer.read())
+          keys = ("model", "compatible", "target-type", "chip-revision", "board-id", "product-name", "manufacturer")
+          def encode(value):
+              if isinstance(value, bytes):
+                  return value.rstrip(b"\0").decode("utf-8", "replace")
+              return value
+          json.dump({k: encode(entries[0][k]) for k in keys if entries and k in entries[0]}, sys.stdout, indent=2, sort_keys=True)
+          ' > apple-device-tree-contract.json
           cat apple-cache-contract.txt
+          cat apple-system-profiler-contract.json
+          cat apple-device-tree-contract.json
       - run: swift test
       - run: swift build -c release
       - run: .build/release/aida128-bench --samples 3 --duration-ms 20 --format json --output arm-smoke.json
@@ -35,6 +61,8 @@ jobs:
           path: |
             arm-smoke.json
             apple-cache-contract.txt
+            apple-system-profiler-contract.json
+            apple-device-tree-contract.json
 
   universal-package:
     runs-on: macos-15
