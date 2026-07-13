@@ -23,9 +23,9 @@ A native macOS cache and memory benchmark inspired by the compact workflow of AI
 | Platform | Backend | Status |
 | --- | --- | --- |
 | Intel macOS x86_64 | AVX2 | Runtime and sanitizer tested on Intel Core i5-14600KF |
-| Apple Silicon arm64 | NEON/ASIMD | Compiles, links, and ships in Universal 2; real-device runtime validation is required before stable v0.1.0 |
+| Apple Silicon arm64 | NEON/ASIMD | Native tests and CLI smoke verified on a GitHub-hosted Apple M1 VM; physical-device GUI validation is required before stable v0.1.0 |
 
-The current release candidate is intentionally marked prerelease until its Apple Silicon results are verified on real hardware. Cross-compilation is not a substitute for runtime validation.
+The current release candidate is intentionally marked prerelease. GitHub Actions has executed the native tests and benchmark CLI on arm64, but a hosted VM does not replace GUI validation on a physical Apple Silicon Mac.
 
 ## Run from source
 

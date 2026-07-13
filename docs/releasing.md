@@ -8,8 +8,8 @@
 4. Intel release build and benchmark smoke run
 5. ARM64 release build
 6. Universal 2 packaging and architecture verification
-7. Real Apple Silicon GUI and CLI smoke run
-8. Real Apple Silicon JSON report review
+7. Apple Silicon native tests, CLI smoke run, and JSON report review in CI
+8. Physical Apple Silicon GUI and CLI smoke run
 9. Publish stable release only after all gates pass
 
 ## Apple Silicon validation
@@ -30,4 +30,4 @@ The public script uses ad-hoc signing. A trusted distribution should use a Devel
 
 ## Release candidate policy
 
-Artifacts may be published as a GitHub prerelease before real ARM validation, provided the release notes state the limitation. Stable `v0.1.0` requires real-device ARM validation.
+Artifacts may be published as a GitHub prerelease after hosted arm64 native/CLI validation, provided the release notes state that physical-device GUI validation is pending. Stable `v0.1.0` requires that physical-device gate.

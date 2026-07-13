@@ -20,5 +20,5 @@ All notable changes to this project are documented here.
 ### Validation status
 
 - Intel runtime, ASan, and TSan: verified.
-- Apple Silicon compile/link/NEON assembly: verified.
-- Apple Silicon real-device runtime: pending before stable v0.1.0.
+- Apple Silicon compile/link, NEON assembly, native tests, and CLI smoke on a GitHub-hosted M1 VM: verified.
+- Apple Silicon physical-device GUI runtime: pending before stable v0.1.0.
